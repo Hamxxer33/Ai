@@ -36,10 +36,19 @@ object QueryAnalyzer {
             "what is the (mechanism|reason|cause|role|purpose|function|significance))\\b|\\b(mechanism|work\\?|works\\?)",
         RegexOption.IGNORE_CASE,
     )
+    // questions that need arithmetic, not just a number looked up
     private val NUMERIC = Regex(
-        "\\b(how (many|much|old|long|far|tall|big|high|deep|fast|heavy)|what (percentage|percent|proportion|fraction|year)|" +
-            "calculate|compute|estimate|ratio|times (larger|bigger|more|smaller)|average|total|sum of|population of|" +
-            "distance|per cent|in years?)\\b",
+        "\\b(how old was|how old were|how many (years|days|months|times|hours|minutes|km|kilometres|kilometers|miles) " +
+            "(passed|elapsed|between|separate|did|does|do|would|will|after|before|longer|more|older)|how long did|how long would|" +
+            "how long will|how much (older|longer|larger|bigger|more|less|heavier|faster)|calculate|compute|" +
+            "times (larger|bigger|more|smaller|heavier|longer|faster)|how many times|ratio|percentage of|what percent|" +
+            "if you (invest|travel|drive|walk|save)|compounded|per (year|hour|second) for|roughly how (far|many|much)|" +
+            "(difference|gap) (in|between) (years|age|height|size))\\b",
+        RegexOption.IGNORE_CASE,
+    )
+    private val QUANTITY = Regex(
+        "\\b(how (many|much|old|long|far|tall|big|high|deep|fast|heavy|large)|what (year|date|percentage|proportion)|" +
+            "when (did|was|were|is)|in what year|population|area|distance|height|length|melting point|boiling point)\\b",
         RegexOption.IGNORE_CASE,
     )
     private val SYNTH = Regex(
@@ -56,6 +65,22 @@ object QueryAnalyzer {
             "(was|were) (born|founded|built|released) (in|during) the (year|decade|reign|presidency) (of|when|that))\\b",
         RegexOption.IGNORE_CASE,
     )
+    // "the author of The Little Prince", "the capital of the country where ...", "the element named after ..."
+    private val RELATION_CHAIN = Regex(
+        "\\b(the |a |an )?(author|writer|director|producer|founder|inventor|creator|composer|painter|architect|designer|" +
+            "discoverer|leader|president|king|queen|monarch|emperor|ruler|wife|husband|spouse|father|mother|son|daughter|" +
+            "capital|currency|language|population|birthplace|home ?town|headquarters|successor|predecessor|owner|" +
+            "manufacturer|developer|publisher|singer|star|coach|captain|mayor|governor|builder)s? of (the |a |an )?" +
+            "([A-Z0-9\"“]|country|city|state|film|movie|book|novel|band|company|element|planet|song|album|team|person|" +
+            "scientist|writer|author|composer|empire|dynasty|war|battle|treaty)",
+    )
+    private val PREDICATE = Regex(
+        "\\b(born|die|died|located|founded|built|invented|discovered|written|wrote|directed|married|educated|stud(y|ied)|" +
+            "attend(ed)?|lived?|flows?|named|w[io]n|completed|released|elected|buried|situated|use[sd]?|speak|spoken|study)\\b",
+        RegexOption.IGNORE_CASE,
+    )
+    private val NAMED_AFTER = Regex("\\b(named after|named for|where (the|a) .+ (is|was) (located|born|built|founded))\\b", RegexOption.IGNORE_CASE)
+
     private val LOOKUP = Regex(
         "^(who (is|was|were|are)|what (is|was|are|were) (the )?\\w+( \\w+)?\\??$|when (did|was|were|is)|where (is|was|are|were|did)|" +
             "which (year|country|city|person)|what year|define|definition of)\\b",
@@ -86,14 +111,23 @@ object QueryAnalyzer {
         if (scores[QuestionType.COMPARISON] == 0.0 && entities.size >= 2 && Regex("\\b(and|or)\\b").containsMatchIn(q) &&
             Regex("^(which|who)\\b", RegexOption.IGNORE_CASE).containsMatchIn(q)
         ) scores[QuestionType.COMPARISON] = 0.6
+        // a property of an entity that is itself described by a relation ("born" + "the author of X")
+        val chain = RELATION_CHAIN.find(q)
+        val outerPredicate = chain != null && PREDICATE.containsMatchIn(q.removeRange(chain.range))
+        val genericWithClause = chain != null && Regex("\\b(country|city|state|film|book|company|person|scientist|place)\\s+(where|that|which|who|whose|in which)\\b", RegexOption.IGNORE_CASE).containsMatchIn(q)
+        if (outerPredicate || genericWithClause || NAMED_AFTER.containsMatchIn(q)) {
+            scores[QuestionType.MULTIHOP] = maxOf(scores[QuestionType.MULTIHOP]!!, 0.8)
+        }
         // long questions with several clauses lean multi-hop
         val clauses = Regex("\\b(that|which|who|whose|where|when)\\b", RegexOption.IGNORE_CASE).findAll(q).count()
         if (clauses >= 2 && scores[QuestionType.MULTIHOP]!! < 0.6) scores[QuestionType.MULTIHOP] = 0.6
 
         var (type, conf) = scores.maxByOrNull { it.value }!!.toPair()
+        val isQuestion = q.endsWith("?") || Regex("^(who|what|when|where|which|why|how|is|are|was|were|do|does|did|can|name|list)\\b", RegexOption.IGNORE_CASE).containsMatchIn(q)
         if (conf == 0.0) {
-            type = if (words.size <= 2) QuestionType.AMBIGUOUS else QuestionType.LOOKUP
-            conf = if (words.size <= 2) 0.5 else 0.3
+            val bare = words.size <= 2 && !isQuestion
+            type = if (bare) QuestionType.AMBIGUOUS else QuestionType.LOOKUP
+            conf = if (bare) 0.5 else 0.4
         }
         // bare topic ("Mercury", "Georgia") is ambiguous rather than a lookup
         if (words.size <= 2 && !q.contains('?') && entities.size <= 1 && type == QuestionType.LOOKUP) {
@@ -105,7 +139,7 @@ object QueryAnalyzer {
         return QueryFeatures(
             text = q, type = type, confidence = conf, words = words, stems = stems, entities = entities,
             comparands = comparands, numbers = numbers,
-            wantsNumber = scores[QuestionType.NUMERIC]!! > 0,
+            wantsNumber = scores[QuestionType.NUMERIC]!! > 0 || QUANTITY.containsMatchIn(q),
             wantsList = LIST.containsMatchIn(q),
         )
     }

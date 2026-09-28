@@ -51,11 +51,22 @@ jobs:
       - name: Install NDK and CMake
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;29.0.14206865" "cmake;3.22.1" "platforms;android-36" "build-tools;36.0.0" > /dev/null
-      - name: Decode signing key (optional)
+      - name: Signing key
         env:
           KEYSTORE_B64: ${{ secrets.KESTREL_KEYSTORE_B64 }}
         run: |
-          if [ -n "$KEYSTORE_B64" ]; then echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"; echo "KESTREL_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"; fi
+          # With repository secrets (see docs/INSTALL.md) releases are signed with the project key.
+          # Without them the APK is signed with a freshly generated debug key: installable, but a
+          # later build cannot update it in place.
+          if [ -n "$KEYSTORE_B64" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "KESTREL_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          fi
+          for d in "$HOME/.config/.android" "$HOME/.android"; do
+            mkdir -p "$d"
+            [ -f "$d/debug.keystore" ] || keytool -genkeypair -keystore "$d/debug.keystore" -storepass android -alias androiddebugkey \
+              -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US" -noprompt
+          done
       - name: Build release APK
         env:
           KESTREL_KEYSTORE_PASSWORD: ${{ secrets.KESTREL_KEYSTORE_PASSWORD }}

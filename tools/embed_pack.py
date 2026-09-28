@@ -14,7 +14,7 @@ dimension and transform are written into manifest.json so the app encodes querie
          --dim 256 --transform layernorm --scope lead:2
 
 Scopes: all | lead:N (first N chunks of every article) | top:M (all chunks of the M highest-prior
-articles) | lead:N,top:M (union).
+articles) | toplead:M (first chunk of the M highest-prior articles) | comma-separated unions.
 """
 from __future__ import annotations
 
@@ -54,7 +54,10 @@ def select_ids(con, scope: str):
             return [r[0] for r in con.execute("SELECT id FROM chunks ORDER BY id")]
         kind, _, n = part.partition(":")
         n = int(n)
-        if kind == "lead":
+        if kind == "toplead":
+            docs = con.execute("SELECT first_chunk FROM docs ORDER BY prior DESC, id LIMIT ?", (n,)).fetchall()
+            ids.update(r[0] for r in docs)
+        elif kind == "lead":
             ids.update(r[0] for r in con.execute("SELECT id FROM chunks WHERE ord < ?", (n,)))
         elif kind == "top":
             docs = [r[0] for r in con.execute("SELECT id FROM docs ORDER BY prior DESC, id LIMIT ?", (n,))]

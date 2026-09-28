@@ -24,7 +24,7 @@ dependencies {
 application {
     mainClass.set("io.kestrel.bench.MainKt")
     applicationDefaultJvmArgs = listOf(
-        "-Xmx2g",
+        "-Xmx2g", "-Dstdout.encoding=UTF-8", "-Dstderr.encoding=UTF-8", "-Dfile.encoding=UTF-8",
         "-Dkestrel.native.dir=" + rootProject.file("build/native-host").absolutePath,
     )
 }

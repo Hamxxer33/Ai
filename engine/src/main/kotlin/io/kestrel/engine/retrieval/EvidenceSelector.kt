@@ -22,6 +22,13 @@ data class Evidence(
     }
 }
 
+/** Scores sentences against the question with an embedding model (cosine similarity). */
+interface SentenceScorer {
+    val maxSentences: Int get() = 48
+    val weight: Double get() = 0.35
+    fun similarities(question: String, sentences: List<String>): List<Float>
+}
+
 data class EvidenceBudget(val maxTokens: Int, val maxSources: Int = 8, val minPerSource: Int = 1, val neighbours: Boolean = true)
 
 /**
@@ -41,6 +48,7 @@ object EvidenceSelector {
         budget: EvidenceBudget,
         extraTerms: List<String> = emptyList(),
         startAt: Int = 1,
+        semantic: SentenceScorer? = null,
     ): List<Evidence> {
         if (retrieved.isEmpty()) return emptyList()
         val feats = QueryAnalyzer.analyze(question)
@@ -50,26 +58,45 @@ object EvidenceSelector {
         val maxChunk = sources.maxOf { it.score }.coerceAtLeast(1e-9)
 
         val sentencesBySrc = sources.map { Sentences.split(it.chunk.text) }
+        val stemsBySrc = sentencesBySrc.map { ss -> ss.map { Text.stems(it).toSet() } }
+        // local IDF: a question term that appears in most candidate sentences ("tower" in an
+        // article about a tower) says little; a rare one ("completed") says a lot
+        val nSent = stemsBySrc.sumOf { it.size }.coerceAtLeast(1)
+        val qw = qStems.associateWith { q ->
+            val df = stemsBySrc.sumOf { src -> src.count { q in it } }
+            if (df == 0) 0.0 else Math.log(1.0 + nSent.toDouble() / df)
+        }
+        val qTotal = qw.values.sum().coerceAtLeast(1e-9)
         val cands = mutableListOf<Cand>()
         val wantsDate = Regex("^when\\b|\\b(what|which) (year|date|century|decade)\\b|\\bin what year\\b", RegexOption.IGNORE_CASE).containsMatchIn(question)
-        val definitional = feats.type == QuestionType.LOOKUP || feats.type == QuestionType.AMBIGUOUS || feats.type == QuestionType.EXPLANATION
+        val definitional = feats.type == QuestionType.LOOKUP || feats.type == QuestionType.AMBIGUOUS ||
+            feats.type == QuestionType.EXPLANATION || feats.type == QuestionType.COMPARISON
         sources.forEachIndexed { si, r ->
             val sents = sentencesBySrc[si]
-            // a sentence in an article implicitly talks about the article's subject
             val titleStems = Text.stems(r.chunk.title).toSet()
             sents.forEachIndexed { i, s ->
-                val own = Text.stems(s).toSet()
+                val own = stemsBySrc[si][i]
                 if (own.isEmpty()) return@forEachIndexed
-                val st = own + titleStems
-                val overlap = if (qStems.isEmpty()) 0.0 else qStems.count { it in st }.toDouble() / qStems.size
-                val ownOverlap = if (qStems.isEmpty()) 0.0 else qStems.count { it in own }.toDouble() / qStems.size
-                val ent = if (entStems.isEmpty()) 0.0 else entStems.count { it in st }.toDouble() / entStems.size
-                val num = if ((feats.wantsNumber || wantsDate) && DATEISH.containsMatchIn(s)) 0.15 else 0.0
+                val ownOverlap = qStems.sumOf { if (it in own) qw[it]!! else 0.0 } / qTotal
+                // terms supplied only by the article title count, but less
+                val titleOnly = qStems.sumOf { if (it !in own && it in titleStems) qw[it]!! else 0.0 } / qTotal
+                val ent = if (entStems.isEmpty()) 0.0 else entStems.count { it in own || it in titleStems }.toDouble() / entStems.size
+                val num = if ((feats.wantsNumber || wantsDate) && DATEISH.containsMatchIn(s)) 0.12 else 0.0
                 val lead = if (r.chunk.ord == 0 && i == 0) (if (definitional) 0.12 else 0.04) else 0.0
                 val len = s.length
                 val lenPenalty = if (len < 40) 0.1 else if (len > 600) 0.1 else 0.0
-                val score = 0.4 * overlap + 0.15 * ownOverlap + 0.15 * ent + num + lead + 0.25 * (r.score / maxChunk) - lenPenalty
+                val score = 0.55 * ownOverlap + 0.15 * titleOnly + 0.1 * ent + num + lead + 0.15 * (r.score / maxChunk) - lenPenalty
                 cands += Cand(si, i, s, score)
+            }
+        }
+        // optional semantic rerank of the strongest lexical candidates (embedding cosine)
+        if (semantic != null && cands.isNotEmpty()) {
+            val top = cands.sortedByDescending { it.score }.take(semantic.maxSentences)
+            val sims = runCatching { semantic.similarities(question, top.map { it.text }) }.getOrNull()
+            if (sims != null && sims.size == top.size) {
+                val lo = sims.minOrNull() ?: 0f
+                val hi = sims.maxOrNull() ?: 1f
+                top.forEachIndexed { k, c -> c.score += semantic.weight * ((sims[k] - lo) / (hi - lo + 1e-6f)) }
             }
         }
         // choose sentences: first guarantee the best sentence of each top source, then fill by score
@@ -90,12 +117,17 @@ object EvidenceSelector {
         }
         val bySrc = cands.groupBy { it.src }
         val srcOrder = sources.indices.take(budget.maxSources)
+        val best = cands.maxOfOrNull { it.score } ?: 0.0
+        // each strong source contributes its best sentence (breadth for synthesis and comparison)
         for (si in srcOrder) {
-            bySrc[si]?.sortedByDescending { it.score }?.take(budget.minPerSource)?.forEach { take(it) }
+            bySrc[si]?.sortedByDescending { it.score }?.take(budget.minPerSource)
+                ?.filter { it.score >= 0.4 * best }?.forEach { take(it) }
         }
+        // then the best remaining sentences anywhere, while they stay close to the best one
         val allowed = srcOrder.toSet()
+        val floor = maxOf(0.15, 0.5 * best)
         for (c in cands.filter { it.src in allowed }.sortedByDescending { it.score }) {
-            if (c.score < 0.12) break
+            if (c.score < floor) break
             if (!take(c) && used > budget.maxTokens * 0.95) break
         }
         // assemble: sources ordered by their best selected sentence (most relevant first, which

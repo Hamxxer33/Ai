@@ -59,6 +59,31 @@ Question: Why did the Bronze Age collapse happen?
 
     fun planUser(question: String) = "Question: $question"
 
+    /** Plan grammar that forces a multi-hop decomposition (used when the rules are confident). */
+    val PLAN_GRAMMAR_MULTIHOP = """
+root ::= "{" ws "\"type\":" ws "\"multihop\"" "," ws "\"subquestions\":" ws strs2 "," ws "\"queries\":" ws strs ws "}"
+strs2 ::= "[" ws str ws "," ws str ( ws "," ws str ){0,2} ws "]"
+strs ::= "[" ws ( str ( ws "," ws str ){0,4} )? ws "]"
+str ::= "\"" chr{1,160} "\""
+chr ::= [^"\\\n] | "\\" ["\\/nt]
+ws ::= [ \n]{0,2}
+""".trim()
+
+    // ------------------------------------------------------------------ scout (article suggestions)
+
+    val SCOUT_SYSTEM = """
+You help search an offline encyclopedia. For the question, name up to 3 encyclopedia article titles most likely to contain the answer: the people, places, things or events involved, including the answer itself if you know it. Reply with a JSON array of titles only, e.g. ["Canberra", "Australia"].
+""".trim()
+
+    fun scoutUser(question: String) = "Question: $question"
+
+    val SCOUT_GRAMMAR = """
+root ::= "[" ws str ( ws "," ws str ){0,2} ws "]"
+str ::= "\"" chr{1,80} "\""
+chr ::= [^"\\\n]
+ws ::= [ ]{0,1}
+""".trim()
+
     /** GBNF for the plan JSON; keeps small models on-format. */
     val PLAN_GRAMMAR = """
 root ::= "{" ws "\"type\":" ws type "," ws "\"subquestions\":" ws strs "," ws "\"queries\":" ws strs ws "}"
@@ -73,7 +98,8 @@ ws ::= [ \n]{0,2}
 
     val HOP_SYSTEM = """
 You answer one research sub-question using only the numbered sources.
-Reply with the short answer (a name, date, number or one sentence) followed by the source numbers, like: Christopher Nolan [2]
+Reply with the short answer that the question asks for (a name, place, date or number, or one sentence), followed by the source numbers, like: Christopher Nolan [2]
+The answer must be new information from the sources, not a repetition of the question.
 If the sources do not answer it, reply exactly: NOT FOUND
 """.trim()
 

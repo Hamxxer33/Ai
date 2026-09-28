@@ -40,6 +40,20 @@ data class RetrievalResult(
     val confidence: Double,
 )
 
+/** Embedding-based sentence scorer for evidence selection (query and passages in the same space). */
+class EmbeddingSentenceScorer(
+    private val model: EmbeddingModel,
+    private val queryPrefix: String = "",
+    private val docPrefix: String = "",
+    override val maxSentences: Int = 48,
+) : SentenceScorer {
+    override fun similarities(question: String, sentences: List<String>): List<Float> {
+        val vs = model.embed(listOf(queryPrefix + question) + sentences.map { docPrefix + it })
+        val q = vs[0]
+        return vs.drop(1).map { v -> var s = 0f; for (i in q.indices) s += q[i] * v[i]; s }
+    }
+}
+
 /** An embedding model plus the prefix/dimension/transform conventions of the pack that indexed with it. */
 class QueryEncoder(
     private val model: EmbeddingModel,
@@ -109,10 +123,16 @@ class HybridRetriever(
             if (informative.isNotEmpty()) {
                 addList("bm25_or", 0.8, pack.search(FtsQuery.any(informative.take(12)), 80).map { ChunkKey(pack.id, it.chunkId) })
             }
-            for (ent in req.entities + feats.entities) {
-                FtsQuery.phrase(ent)?.let { ph ->
-                    addList("bm25_phrase", 0.6, pack.search(ph, 25).map { ChunkKey(pack.id, it.chunkId) })
+            for (ent in (req.entities + feats.entities).distinctBy { Text.fold(it) }.take(6)) {
+                val ph = FtsQuery.phrase(ent) ?: continue
+                // the entity together with the question's other rare terms ("president of the
+                // united states" AND 1889) is far more precise than either alone
+                val entWords = Text.words(ent).toSet()
+                val rest = rare.filter { it !in entWords }.take(3)
+                if (rest.isNotEmpty()) {
+                    addList("bm25_ent_and", 1.0, pack.search("$ph AND (${FtsQuery.any(rest)})", 30).map { ChunkKey(pack.id, it.chunkId) })
                 }
+                addList("bm25_phrase", 0.5, pack.search(ph, 20).map { ChunkKey(pack.id, it.chunkId) })
             }
             for ((i, q) in req.queries.withIndex()) {
                 val qw = Text.contentWords(q).distinct()
@@ -169,11 +189,25 @@ class HybridRetriever(
             for (c in pack.chunks(keys.map { it.id })) chunks[ChunkKey(pid, c.id)] = c
         }
         val qStems = feats.stems.toSet() + req.entities.flatMap { Text.stems(it) }
+        // adjacent content-word pairs of the question ("capit austral", "walk moon"): a chunk that
+        // keeps them together (at most one word apart) is usually about exactly this
+        val qPairs = feats.stems.zipWithNext().filter { it.first != it.second }.toSet()
         val idfW = qStems.associateWith { s -> 1.0 + (if (s.length > 6) 0.3 else 0.0) }
         val maxFused = fused.values.maxOrNull() ?: 1.0
         val scored = pool.mapNotNull { key ->
             val c = chunks[key] ?: return@mapNotNull null
-            val cStems = Text.stems(c.title + " " + c.section + " " + c.text).toSet()
+            val seq = Text.stems(c.title + ". " + c.text)
+            val cStems = seq.toSet() + Text.stems(c.section)
+            val prox = if (qPairs.isEmpty()) 0.0 else {
+                val found = HashSet<Pair<String, String>>()
+                for (i in seq.indices) for (d in 1..2) if (i + d < seq.size) {
+                    val p = seq[i] to seq[i + d]
+                    if (p in qPairs) found += p
+                    val r = seq[i + d] to seq[i]
+                    if (r in qPairs) found += r
+                }
+                found.size.toDouble() / qPairs.size
+            }
             val titleStems = Text.stems(c.title).toSet()
             val cov = if (qStems.isEmpty()) 0.0 else qStems.sumOf { if (it in cStems) idfW[it]!! else 0.0 } / qStems.sumOf { idfW[it]!! }
             val titleOverlap = if (titleStems.isEmpty()) 0.0 else titleStems.count { it in qStems }.toDouble() / titleStems.size
@@ -181,9 +215,9 @@ class HybridRetriever(
             val lead = if (c.ord == 0) 1.0 else 0.0
             val prior = packs.first { it.id == key.pack }.doc(c.docId)?.prior ?: 0.0
             val rrf = (fused[key] ?: 0.0) / maxFused
-            val score = 0.34 * rrf + 0.38 * cov + 0.10 * titleOverlap + 0.10 * entity + 0.04 * lead + 0.04 * prior
+            val score = 0.30 * rrf + 0.30 * cov + 0.14 * prox + 0.10 * titleOverlap + 0.08 * entity + 0.04 * lead + 0.04 * prior
             val sig = (signalRanks[key] ?: emptyMap()) + mapOf(
-                "rrf" to rrf, "coverage" to cov, "title_overlap" to titleOverlap, "entity" to entity, "prior" to prior,
+                "rrf" to rrf, "coverage" to cov, "proximity" to prox, "title_overlap" to titleOverlap, "entity" to entity, "prior" to prior,
             )
             Retrieved(c, score, sig)
         }.sortedByDescending { it.score }
@@ -214,23 +248,32 @@ class HybridRetriever(
         val words = Text.words(question)
         val raw = Regex("[\\p{L}\\p{N}]+(?:['’][\\p{L}]+)?").findAll(question).map { it.value }.toList()
         val grams = LinkedHashMap<String, Double>()
+        val lowercaseSingles = HashSet<String>()
         for (n in 6 downTo 1) {
             for (i in 0..words.size - n) {
                 val g = words.subList(i, i + n)
                 if (g.first() in io.kestrel.engine.text.Stopwords.ALL || g.last() in io.kestrel.engine.text.Stopwords.ALL) continue
                 val capitalised = (i until i + n).all { it < raw.size && (raw[it].first().isUpperCase() || raw[it].first().isDigit() || words[it] in CONNECT) }
-                if (n == 1 && !capitalised && g[0].length < 5) continue
-                val strength = min(1.0, 0.35 + 0.2 * n + if (capitalised) 0.3 else 0.0)
-                grams.merge(g.joinToString(" "), strength) { a, b -> max(a, b) }
+                if (n == 1 && !capitalised && g[0].length < 3) continue
+                val strength = if (n == 1 && !capitalised) 0.3 else min(1.0, 0.35 + 0.2 * n + if (capitalised) 0.3 else 0.0)
+                val key = g.joinToString(" ")
+                grams.merge(key, strength) { a, b -> max(a, b) }
+                if (n == 1 && !capitalised) lowercaseSingles += key
             }
         }
         for (e in entities) grams.merge(Text.normTitle(e), 1.0) { a, b -> max(a, b) }
         if (grams.isEmpty()) return emptyList()
+        // lowercase single words ("ice", "tides") only stand in for the topic when the question
+        // names no capitalised entity; otherwise they are generic ("country", "author")
+        val hasNamed = grams.keys.any { it !in lowercaseSingles }
+        if (hasNamed) lowercaseSingles.forEach { grams.remove(it) }
         val hits = pack.lookupTitles(grams.keys)
         val result = mutableListOf<Linked>()
         val covered = mutableListOf<String>()
         for ((g, strength) in grams.entries.sortedByDescending { it.key.split(' ').size * 10 + it.value }) {
-            val h = hits[g] ?: continue
+            // a lowercase common word ("ice", "tides") links only to an article with exactly that title
+            val h = (hits[g] ?: continue).let { hs -> if (g in lowercaseSingles) hs.filter { it.kind == 0 } else hs }
+            if (h.isEmpty()) continue
             // skip n-grams that are inside a longer matched n-gram
             if (covered.any { it.contains(g) && it != g }) continue
             covered += g

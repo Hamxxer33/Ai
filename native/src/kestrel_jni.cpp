@@ -178,6 +178,10 @@ struct GenParams {
     std::string grammar;
     std::vector<std::string> stop;
     bool reuse_prefix = true;
+    // Formatted prompt prefix (usually the system turn) whose model state is snapshotted so later
+    // prompts starting with it skip its prefill, even on recurrent/hybrid or SWA models whose
+    // cache cannot drop a suffix.
+    std::string snapshot_prefix;
 };
 
 GenParams parse_gen_params(const std::string & json) {
@@ -201,6 +205,7 @@ GenParams parse_gen_params(const std::string & json) {
         else if (key == "repeat_last_n") p.repeat_last_n = std::stoi(c.scalar());
         else if (key == "seed") p.seed = static_cast<uint32_t>(std::stoul(c.scalar()));
         else if (key == "reuse_prefix") p.reuse_prefix = c.scalar() == "true";
+        else if (key == "snapshot_prefix") p.snapshot_prefix = c.str();
         else c.skip_value();
         c.eat(',');
     }
@@ -237,7 +242,15 @@ struct Model {
     double load_ms = 0;
 };
 
+struct Snapshot {
+    std::vector<llama_token> tokens;
+    std::vector<uint8_t> state;
+    uint64_t last_used = 0;
+};
+
 struct Context {
+    std::vector<Snapshot> snaps;  // LRU, at most kMaxSnaps
+    uint64_t tick = 0;
     Model * owner = nullptr;
     llama_context * ctx = nullptr;
     std::vector<llama_token> cached;  // tokens currently in the KV cache for seq 0
@@ -247,6 +260,19 @@ struct Context {
     bool embeddings = false;
     int n_seq_max = 1;
 };
+
+constexpr size_t kMaxSnaps = 4;
+
+std::vector<llama_token> tokenize_prompt(const llama_vocab * vocab, const std::string & text) {
+    std::vector<llama_token> t = common_tokenize(vocab, text, true, true);
+    const llama_token bos = llama_vocab_bos(vocab);
+    if (t.size() >= 2 && t[0] == bos && t[1] == bos) t.erase(t.begin());
+    return t;
+}
+
+bool is_prefix(const std::vector<llama_token> & p, const std::vector<llama_token> & of) {
+    return p.size() <= of.size() && std::equal(p.begin(), p.end(), of.begin());
+}
 
 bool abort_cb(void * data) {
     return static_cast<Context *>(data)->cancel.load();
@@ -269,7 +295,7 @@ JNIEXPORT void JNICALL JNI_FN(backendInit)(JNIEnv * env, jclass, jbyteArray jLib
     if (g_backend_ready.load()) return;
     if (!verbose) {
         llama_log_set([](ggml_log_level level, const char * text, void *) {
-            if (level >= GGML_LOG_LEVEL_WARN) KLOG("%s", text);
+            if (level == GGML_LOG_LEVEL_WARN || level == GGML_LOG_LEVEL_ERROR) KLOG("%s", text);
         }, nullptr);
     }
     const std::string dir = from_bytes(env, jLibDir);
@@ -475,9 +501,7 @@ JNIEXPORT jbyteArray JNICALL JNI_FN(generate)(JNIEnv * env, jclass, jlong handle
     }
 
     const auto t_start = clk::now();
-    std::vector<llama_token> toks = common_tokenize(vocab, prompt, true, true);
-    const llama_token bos = llama_vocab_bos(vocab);
-    if (toks.size() >= 2 && toks[0] == bos && toks[1] == bos) toks.erase(toks.begin());
+    std::vector<llama_token> toks = tokenize_prompt(vocab, prompt);
     const int n_ctx = static_cast<int>(llama_n_ctx(c->ctx));
     if (static_cast<int>(toks.size()) + gp.max_tokens > n_ctx) {
         // Keep the head (system prompt) and the tail (question); drop from the middle.
@@ -502,30 +526,86 @@ JNIEXPORT jbyteArray JNICALL JNI_FN(generate)(JNIEnv * env, jclass, jlong handle
     if (n_keep == 0) llama_memory_clear(mem, true);
     c->cached.resize(n_keep);
 
+    // ---- snapshot restore: a saved state whose tokens prefix this prompt beats a shorter reuse
+    size_t n_restored = 0;
+    {
+        Snapshot * best = nullptr;
+        for (auto & sn : c->snaps) {
+            if (sn.tokens.size() > n_keep && sn.tokens.size() < toks.size() && is_prefix(sn.tokens, toks) &&
+                (!best || sn.tokens.size() > best->tokens.size())) best = &sn;
+        }
+        if (best) {
+            llama_memory_clear(mem, true);
+            if (llama_state_seq_set_data(c->ctx, best->state.data(), best->state.size(), 0) > 0) {
+                c->cached = best->tokens;
+                n_keep = best->tokens.size();
+                n_restored = n_keep;
+                best->last_used = ++c->tick;
+            } else {
+                llama_memory_clear(mem, true);
+                c->cached.clear();
+                n_keep = 0;
+            }
+        }
+    }
+
+    // ---- where to take a new snapshot (end of the given prefix), if it is not cached yet
+    size_t n_snap = 0;
+    if (!gp.snapshot_prefix.empty()) {
+        std::vector<llama_token> pt = tokenize_prompt(vocab, gp.snapshot_prefix);
+        const bool have = std::any_of(c->snaps.begin(), c->snaps.end(), [&](const Snapshot & sn) { return sn.tokens == pt; });
+        if (!have && pt.size() > n_keep && pt.size() < toks.size() && is_prefix(pt, toks)) n_snap = pt.size();
+    }
+
     // ---- prefill
     const auto t_prefill = clk::now();
     llama_batch batch = llama_batch_init(c->n_batch, 0, 1);
     bool failed = false;
-    for (size_t i = n_keep; i < toks.size() && !failed; i += static_cast<size_t>(c->n_batch)) {
-        const size_t end = std::min(toks.size(), i + static_cast<size_t>(c->n_batch));
-        common_batch_clear(batch);
-        for (size_t j = i; j < end; ++j) {
-            common_batch_add(batch, toks[j], static_cast<llama_pos>(j), {0}, j == toks.size() - 1);
+    auto prefill = [&](size_t from, size_t to) {
+        for (size_t i = from; i < to && !failed; i += static_cast<size_t>(c->n_batch)) {
+            const size_t end = std::min(to, i + static_cast<size_t>(c->n_batch));
+            common_batch_clear(batch);
+            for (size_t j = i; j < end; ++j) {
+                common_batch_add(batch, toks[j], static_cast<llama_pos>(j), {0}, j == toks.size() - 1);
+            }
+            if (llama_decode(c->ctx, batch) != 0) failed = true;
+            else c->cached.insert(c->cached.end(), toks.begin() + static_cast<long>(i), toks.begin() + static_cast<long>(end));
+            if (c->cancel.load()) { failed = true; break; }
         }
-        const int rc = llama_decode(c->ctx, batch);
-        if (rc != 0) failed = true;
-        else c->cached.insert(c->cached.end(), toks.begin() + static_cast<long>(i), toks.begin() + static_cast<long>(end));
-        if (c->cancel.load()) break;
+    };
+    if (n_snap > 0) {
+        prefill(n_keep, n_snap);
+        if (!failed) {
+            Snapshot sn;
+            sn.tokens.assign(toks.begin(), toks.begin() + static_cast<long>(n_snap));
+            sn.state.resize(llama_state_seq_get_size(c->ctx, 0));
+            if (!sn.state.empty() && llama_state_seq_get_data(c->ctx, sn.state.data(), sn.state.size(), 0) > 0) {
+                sn.last_used = ++c->tick;
+                if (c->snaps.size() >= kMaxSnaps) {
+                    auto lru = std::min_element(c->snaps.begin(), c->snaps.end(),
+                                                [](const Snapshot & a, const Snapshot & b) { return a.last_used < b.last_used; });
+                    c->snaps.erase(lru);
+                }
+                c->snaps.push_back(std::move(sn));
+            }
+        }
+        prefill(n_snap, toks.size());
+    } else {
+        prefill(n_keep, toks.size());
     }
     const double prefill_ms = ms_since(t_prefill);
     const int n_prefilled = static_cast<int>(toks.size() - n_keep);
 
-    // ---- sampler chain
+    // ---- samplers
+    // The grammar is kept out of the chain: each token is first sampled normally and only checked
+    // against the grammar; the full-vocabulary grammar pass runs only when that token is rejected
+    // (the same strategy as llama.cpp's common sampler). With 150k-250k token vocabularies this is
+    // several times faster than masking the whole vocabulary at every step.
     llama_sampler * chain = llama_sampler_chain_init(llama_sampler_chain_default_params());
+    llama_sampler * grammar = nullptr;
     if (!gp.grammar.empty()) {
-        llama_sampler * g = llama_sampler_init_grammar(vocab, gp.grammar.c_str(), "root");
-        if (g) llama_sampler_chain_add(chain, g);
-        else KLOG("grammar failed to parse; generating unconstrained");
+        grammar = llama_sampler_init_grammar(vocab, gp.grammar.c_str(), "root");
+        if (!grammar) KLOG("grammar failed to parse; generating unconstrained");
     }
     if (gp.repeat_penalty > 1.0f) {
         llama_sampler_chain_add(chain, llama_sampler_init_penalties(llama_vocab_n_tokens(vocab), gp.repeat_last_n, gp.repeat_penalty, 0.0f, 0.0f));
@@ -539,6 +619,33 @@ JNIEXPORT jbyteArray JNICALL JNI_FN(generate)(JNIEnv * env, jclass, jlong handle
         llama_sampler_chain_add(chain, llama_sampler_init_temp(gp.temperature));
         llama_sampler_chain_add(chain, llama_sampler_init_dist(gp.seed));
     }
+    const int n_vocab = llama_vocab_n_tokens(vocab);
+    std::vector<llama_token_data> cand(static_cast<size_t>(n_vocab));
+    auto fill = [&](llama_token_data_array & arr) {
+        const float * logits = llama_get_logits_ith(c->ctx, -1);
+        for (int t = 0; t < n_vocab; ++t) cand[static_cast<size_t>(t)] = llama_token_data{t, logits[t], 0.0f};
+        arr = llama_token_data_array{cand.data(), cand.size(), -1, false};
+    };
+    auto sample = [&]() -> llama_token {
+        llama_token_data_array arr;
+        fill(arr);
+        llama_sampler_apply(chain, &arr);
+        llama_token tok = arr.data[arr.selected].id;
+        if (grammar) {
+            llama_token_data single{tok, 1.0f, 0.0f};
+            llama_token_data_array one{&single, 1, -1, false};
+            llama_sampler_apply(grammar, &one);
+            if (std::isinf(one.data[0].logit) && one.data[0].logit < 0) {
+                fill(arr);
+                llama_sampler_apply(grammar, &arr);
+                llama_sampler_apply(chain, &arr);
+                tok = arr.data[arr.selected].id;
+            }
+            llama_sampler_accept(grammar, tok);
+        }
+        llama_sampler_accept(chain, tok);
+        return tok;
+    };
 
     // ---- decode loop
     std::string text, pending;  // pending = bytes not yet sent (incomplete UTF-8 or possible stop prefix)
@@ -573,7 +680,7 @@ JNIEXPORT jbyteArray JNICALL JNI_FN(generate)(JNIEnv * env, jclass, jlong handle
 
     while (!failed && n_gen < gp.max_tokens) {
         if (c->cancel.load() || user_stopped) { stop_reason = "cancelled"; break; }
-        const llama_token tok = llama_sampler_sample(chain, c->ctx, -1);
+        const llama_token tok = sample();
         if (llama_vocab_is_eog(vocab, tok)) { stop_reason = "eos"; break; }
         if (ttft_ms < 0) ttft_ms = ms_since(t_start);
         const std::string piece = common_token_to_piece(c->ctx, tok, false);
@@ -604,6 +711,7 @@ JNIEXPORT jbyteArray JNICALL JNI_FN(generate)(JNIEnv * env, jclass, jlong handle
     flush(true);
     const double decode_ms = ms_since(t_decode);
     llama_sampler_free(chain);
+    if (grammar) llama_sampler_free(grammar);
     llama_batch_free(batch);
 
     std::ostringstream o;
@@ -611,6 +719,7 @@ JNIEXPORT jbyteArray JNICALL JNI_FN(generate)(JNIEnv * env, jclass, jlong handle
       << ",\"prompt_tokens\":" << toks.size()
       << ",\"prefilled_tokens\":" << n_prefilled
       << ",\"reused_tokens\":" << n_keep
+      << ",\"restored_tokens\":" << n_restored
       << ",\"generated_tokens\":" << n_gen
       << ",\"prefill_ms\":" << prefill_ms
       << ",\"decode_ms\":" << decode_ms

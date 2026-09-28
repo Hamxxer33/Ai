@@ -38,6 +38,8 @@ data class GenerationParams(
     val grammar: String? = null,
     val reusePrefix: Boolean = true,
     val seed: Int = 42,
+    /** Formatted prompt prefix to snapshot (set by [LlamaModel.chat] from the system turn). */
+    val snapshotPrefix: String? = null,
 ) {
     fun toJson(): String = buildJsonObject {
         put("max_tokens", maxTokens)
@@ -50,6 +52,7 @@ data class GenerationParams(
         put("reuse_prefix", reusePrefix)
         put("stop", JsonArray(stop.map { JsonPrimitive(it) }))
         grammar?.let { put("grammar", it) }
+        snapshotPrefix?.let { put("snapshot_prefix", it) }
     }.toString()
 }
 
@@ -64,6 +67,7 @@ data class GenerationStats(
     val ttft_ms: Double = 0.0,
     val total_ms: Double = 0.0,
     val stop_reason: String = "",
+    val restored_tokens: Int = 0,
 ) {
     val prefillTokensPerSecond: Double get() = if (prefill_ms > 0) prefilled_tokens * 1000.0 / prefill_ms else 0.0
     val decodeTokensPerSecond: Double get() = if (decode_ms > 0) generated_tokens * 1000.0 / decode_ms else 0.0
@@ -81,6 +85,7 @@ private data class RawResult(
     val ttft_ms: Double = 0.0,
     val total_ms: Double = 0.0,
     val stop_reason: String = "",
+    val restored_tokens: Int = 0,
 )
 
 data class GenerationResult(val text: String, val stats: GenerationStats, val modelId: String)
@@ -161,8 +166,26 @@ class LlamaModel private constructor(
         onText: ((String) -> Unit)?,
     ): GenerationResult {
         val prompt = formatChat(messages, thinking)
-        return complete(prompt, params, onText)
+        val sys = messages.firstOrNull()?.takeIf { it.role == "system" }
+        val prefix = if (sys == null || params.snapshotPrefix != null) params.snapshotPrefix else systemPrefix(sys, thinking)
+        return complete(prompt, params.copy(snapshotPrefix = prefix?.takeIf { prompt.startsWith(it) }), onText)
     }
+
+    private val prefixCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /**
+     * The part of any prompt that starts with this system message and does not depend on the user
+     * turn: the longest common prefix of two renderings with different user text, cut back to a
+     * line break so that it tokenizes the same way inside the full prompt.
+     */
+    private fun systemPrefix(sys: ChatMessage, thinking: Boolean): String? = prefixCache.getOrPut(sys.content + "|" + thinking) {
+        val a = formatChat(listOf(sys, ChatMessage.user("alpha")), thinking)
+        val b = formatChat(listOf(sys, ChatMessage.user("omega")), thinking)
+        var n = 0
+        while (n < a.length && n < b.length && a[n] == b[n]) n++
+        val cut = a.lastIndexOf('\n', n - 1)
+        if (cut > sys.content.length / 2) a.substring(0, cut + 1) else ""
+    }.ifEmpty { null }
 
     fun formatChat(messages: List<ChatMessage>, thinking: Boolean): String {
         val arr = buildJsonArray {
@@ -194,7 +217,7 @@ class LlamaModel private constructor(
             val r = json.decodeFromString(RawResult.serializer(), String(raw, Charsets.UTF_8))
             val stats = GenerationStats(
                 r.prompt_tokens, r.prefilled_tokens, r.reused_tokens, r.generated_tokens,
-                r.prefill_ms, r.decode_ms, r.ttft_ms, r.total_ms, r.stop_reason,
+                r.prefill_ms, r.decode_ms, r.ttft_ms, r.total_ms, r.stop_reason, r.restored_tokens,
             )
             GenerationResult(ReasoningFilter.strip(r.text), stats, id)
         } finally {

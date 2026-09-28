@@ -84,9 +84,23 @@ private fun threads(o: Opts) = o.int("threads", Runtime.getRuntime().availablePr
 
 private fun openPacks(o: Opts): List<KnowledgePack> = o.all("pack").map { KnowledgePack.open(File(it)) { p -> JdbcSqlDb.openReadOnly(p) } }
 
+private var embedderCache: LlamaEmbedder? = null
+private fun embedder(o: Opts): LlamaEmbedder? {
+    val path = o.get("embed") ?: return null
+    return embedderCache ?: LlamaEmbedder.load("embed", path, threads(o)).also { embedderCache = it }
+}
+
+private fun sentenceScorer(o: Opts, packs: List<KnowledgePack>): io.kestrel.engine.retrieval.SentenceScorer? {
+    if (o.get("no-semantic") == "true") return null
+    val emb = embedder(o) ?: return null
+    val spec = packs.firstNotNullOfOrNull { it.manifest.embedding }
+    val qp = spec?.query_prefix ?: o.get("query-prefix") ?: ""
+    val dp = spec?.doc_prefix ?: o.get("doc-prefix") ?: ""
+    return io.kestrel.engine.retrieval.EmbeddingSentenceScorer(emb, qp, dp)
+}
+
 private fun encoders(o: Opts, packs: List<KnowledgePack>): Map<String, QueryEncoder> {
-    val path = o.get("embed") ?: return emptyMap()
-    val emb = LlamaEmbedder.load("embed", path, threads(o))
+    val emb = embedder(o) ?: return emptyMap()
     return packs.mapNotNull { p ->
         val spec = p.manifest.embedding ?: return@mapNotNull null
         if (p.vectors == null) null else p.id to QueryEncoder(emb, spec.query_prefix, spec.dim, spec.transform)
@@ -133,7 +147,9 @@ private fun retrieve(o: Opts) {
         println("%2d %.3f %s — %s [%s]".format(i + 1, it.score, it.chunk.title, it.chunk.section, it.signals.entries.joinToString { e -> "${e.key}=${"%.3f".format(e.value)}" }))
         println("    " + it.chunk.text.take(220).replace("\n", " "))
     }
-    val ev = EvidenceSelector.select(q, res.items, EvidenceBudget(o.int("budget", 900), 8))
+    val t1 = System.currentTimeMillis()
+    val ev = EvidenceSelector.select(q, res.items, EvidenceBudget(o.int("budget", 900), 8), semantic = sentenceScorer(o, packs))
+    println("evidence selection ${System.currentTimeMillis() - t1} ms")
     println("\n--- evidence (${ev.sumOf { io.kestrel.engine.text.Text.estimateTokens(it.render()) }} tok est) ---")
     println(EvidenceSelector.render(ev))
 }
@@ -141,7 +157,7 @@ private fun retrieve(o: Opts) {
 private fun buildEngine(o: Opts): Pair<ResearchEngine, List<KnowledgePack>> {
     val packs = openPacks(o)
     val retriever = HybridRetriever(packs, encoders(o, packs))
-    return ResearchEngine(retriever, DesktopModels(o)) to packs
+    return ResearchEngine(retriever, DesktopModels(o), sentenceScorer = sentenceScorer(o, packs)) to packs
 }
 
 private fun mode(o: Opts) = when (o.get("mode")) { "quick" -> ResearchMode.QUICK; "deep" -> ResearchMode.DEEP; else -> ResearchMode.AUTO }

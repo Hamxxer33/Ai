@@ -57,8 +57,12 @@ object Text {
                     val gap = s.substring(toks[j - 1].range.last + 1, toks[j].range.first)
                     if (gap.any { it == ',' || it == '?' || it == ';' || it == ':' || it == '(' || it == ')' }) break
                     if (w[0].isUpperCase() || w[0].isDigit()) { end = j; j++ }
-                    else if (fold(w) in CONNECTORS && j + 1 < toks.size && toks[j + 1].value[0].isUpperCase()) { j++ }
-                    else break
+                    else if (fold(w) in CONNECTORS) {
+                        // allow runs of connectors ("of the") when a capitalised word follows
+                        var k = j
+                        while (k < toks.size && fold(toks[k].value) in CONNECTORS) k++
+                        if (k < toks.size && k - j <= 2 && toks[k].value[0].isUpperCase()) j = k else break
+                    } else break
                 }
                 out += s.substring(toks[start].range.first, toks[end].range.last + 1).trimEnd('.', '\'', '’')
                 i = end + 1

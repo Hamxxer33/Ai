@@ -14,6 +14,7 @@ import io.kestrel.engine.retrieval.QueryFeatures
 import io.kestrel.engine.retrieval.QuestionType
 import io.kestrel.engine.retrieval.Retrieved
 import io.kestrel.engine.retrieval.RetrievalRequest
+import io.kestrel.engine.retrieval.SentenceScorer
 import io.kestrel.engine.text.Text
 import kotlinx.coroutines.ensureActive
 import kotlinx.serialization.json.Json
@@ -79,6 +80,8 @@ class ResearchEngine(
     private val retriever: HybridRetriever,
     private val models: ModelProvider,
     private val config: EngineConfig = EngineConfig(),
+    /** Optional embedding reranker for evidence sentences (see EvidenceSelector). */
+    private val sentenceScorer: SentenceScorer? = null,
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -140,7 +143,8 @@ class ResearchEngine(
             val fast = models.get(ModelRole.FAST) ?: models.get(ModelRole.STRONG)
             if (fast != null) {
                 plan = step("plan", "Plan research") {
-                    val p = runCatching { planWith(fast, q, calls) }.getOrNull() ?: fallbackPlan(feats)
+                    val force = feats.type == QuestionType.MULTIHOP && feats.confidence >= 0.75
+                    val p = runCatching { planWith(fast, q, calls, force) }.getOrNull() ?: fallbackPlan(feats)
                     p to "${p.type.name.lowercase()}: ${p.subquestions.size} sub-questions, ${p.queries.size} searches"
                 }
                 if (plan.type != feats.type && feats.confidence < 0.7) {
@@ -165,15 +169,22 @@ class ResearchEngine(
             for ((i, raw) in subqs.withIndex()) {
                 coroutineContext.ensureActive()
                 val sq = substitute(raw, hopAnswers)
+                // entities for this hop: answers it references (#k), or the previous answer when
+                // this hop continues the same chain ("Who wrote X?" -> "Where was the author of X born?")
+                val refs = Regex("#(\\d)").findAll(raw).mapNotNull { hopAnswers.getOrNull(it.groupValues[1].toInt() - 1) }.toList()
+                val prev = if (i > 0 && refs.isEmpty() && hops.lastOrNull()?.answer != null &&
+                    Text.stems(hops.last().question).toSet().intersect(Text.stems(raw).toSet()).isNotEmpty()
+                ) listOfNotNull(hopAnswers.lastOrNull()) else emptyList()
+                val hopEntities = (refs + prev).filter { it.isNotBlank() && it.length < 80 }
                 val hop = step("hop${i + 1}", "Research: $sq") {
                     val hs = System.currentTimeMillis()
                     val rs = System.currentTimeMillis()
-                    val res = retriever.retrieve(RetrievalRequest(sq, queries = plan.queries.take(2), entities = hopAnswers.takeLast(1), k = 6, maxPerDoc = 2))
+                    val res = retriever.retrieve(RetrievalRequest(sq, entities = hopEntities, k = 6, maxPerDoc = 2))
                     retrievalMs += System.currentTimeMillis() - rs
                     linked += res.linkedDocs
                     res.items.forEach { pool.putIfAbsent(it.chunk.packId to it.chunk.id, it) }
                     var answer: String? = null
-                    val ev = EvidenceSelector.select(sq, res.items, EvidenceBudget(config.hopEvidenceTokens, maxSources = 4))
+                    val ev = EvidenceSelector.select(sq, res.items, EvidenceBudget(config.hopEvidenceTokens, maxSources = 4), extraTerms = hopEntities, semantic = sentenceScorer)
                     if (fast != null && ev.isNotEmpty()) {
                         val r = fast.chat(
                             listOf(ChatMessage.system(Prompts.HOP_SYSTEM), ChatMessage.user(Prompts.hopUser(sq, EvidenceSelector.render(ev)))),
@@ -181,7 +192,7 @@ class ResearchEngine(
                         )
                         calls += LlmCall("hop${i + 1}", r.modelId, r.stats)
                         val a = r.text.trim().lines().firstOrNull { it.isNotBlank() }?.trim()
-                        answer = if (a == null || a.uppercase().startsWith("NOT FOUND")) null else a
+                        answer = if (a == null || a.uppercase().startsWith("NOT FOUND") || echoesQuestion(a, sq)) null else a
                     }
                     val h = Hop(sq, answer, ev, System.currentTimeMillis() - hs)
                     h to (answer ?: if (extract) "not found" else "${ev.size} sources")
@@ -191,10 +202,33 @@ class ResearchEngine(
             }
         }
 
+        // ---- 3b. scout: for questions whose answer entity is not named ("What is the capital of
+        // Australia?"), the fast model names candidate articles. Its memory only steers the search;
+        // every fact in the answer must still come from the retrieved text.
+        val scoutTitles = mutableListOf<String>()
+        if (mode != ResearchMode.QUICK && plan.queries.isEmpty() &&
+            feats.type in setOf(QuestionType.LOOKUP, QuestionType.NUMERIC, QuestionType.MULTIHOP, QuestionType.AMBIGUOUS)
+        ) {
+            val fast = models.get(ModelRole.FAST) ?: models.get(ModelRole.STRONG)
+            if (fast != null) {
+                scoutTitles += step("scout", "Suggest articles") {
+                    val r = fast.chat(
+                        listOf(ChatMessage.system(Prompts.SCOUT_SYSTEM), ChatMessage.user(Prompts.scoutUser(q))),
+                        GenerationParams(maxTokens = 48, grammar = Prompts.SCOUT_GRAMMAR),
+                    )
+                    calls += LlmCall("scout", r.modelId, r.stats)
+                    val titles = runCatching {
+                        json.parseToJsonElement(r.text.substring(r.text.indexOf('['))).jsonArray.map { it.jsonPrimitive.content.trim() }
+                    }.getOrDefault(emptyList()).filter { it.length in 2..80 }.take(3)
+                    titles to titles.joinToString()
+                }
+            }
+        }
+
         // ---- 4. main retrieval
         val main = step("retrieve", "Search offline library") {
             val rs = System.currentTimeMillis()
-            val extraEntities = hopAnswers.filter { it.isNotBlank() && it.length < 80 } + feats.comparands
+            val extraEntities = hopAnswers.filter { it.isNotBlank() && it.length < 80 } + feats.comparands + scoutTitles
             val res = retriever.retrieve(
                 RetrievalRequest(q, queries = plan.queries.take(4), entities = extraEntities, k = route.retrieveK, maxPerDoc = if (feats.type == QuestionType.LOOKUP) 3 else 2),
             )
@@ -216,6 +250,7 @@ class ResearchEngine(
             val ev = EvidenceSelector.select(
                 q, ranked, EvidenceBudget(route.evidenceTokens, maxSources = route.maxSources),
                 extraTerms = hopAnswers.filter { it.isNotBlank() } + feats.comparands,
+                semantic = sentenceScorer,
             )
             ev to "${ev.size} sources, ~${ev.sumOf { Text.estimateTokens(it.render()) }} tokens"
         }
@@ -300,10 +335,10 @@ class ResearchEngine(
 
     data class Plan(val type: QuestionType, val subquestions: List<String>, val queries: List<String>)
 
-    private suspend fun planWith(model: LanguageModel, q: String, calls: MutableList<LlmCall>): Plan {
+    private suspend fun planWith(model: LanguageModel, q: String, calls: MutableList<LlmCall>, forceMultihop: Boolean): Plan {
         val r = model.chat(
             listOf(ChatMessage.system(Prompts.PLAN_SYSTEM), ChatMessage.user(Prompts.planUser(q))),
-            GenerationParams(maxTokens = 220, grammar = Prompts.PLAN_GRAMMAR),
+            GenerationParams(maxTokens = 220, grammar = if (forceMultihop) Prompts.PLAN_GRAMMAR_MULTIHOP else Prompts.PLAN_GRAMMAR),
         )
         calls += LlmCall("plan", r.modelId, r.stats)
         val obj = json.parseToJsonElement(r.text.substring(r.text.indexOf('{'))).jsonObject
@@ -324,6 +359,12 @@ class ResearchEngine(
     private fun fallbackPlan(f: QueryFeatures): Plan = when (f.type) {
         QuestionType.COMPARISON -> Plan(f.type, f.comparands.map { "What is $it?" }, f.comparands)
         else -> Plan(f.type, emptyList(), f.entities)
+    }
+
+    /** A hop "answer" that only repeats the question's own subject is no answer. */
+    private fun echoesQuestion(answer: String, question: String): Boolean {
+        val a = Text.stems(stripCitations(answer)).toSet()
+        return a.isNotEmpty() && a.size <= 6 && Text.stems(question).toSet().containsAll(a)
     }
 
     private fun stripCitations(s: String) = s.replace(Regex("\\s*\\[[\\d,\\s–-]+]"), "").trim()

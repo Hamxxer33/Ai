@@ -34,7 +34,7 @@ object Router {
             ResearchMode.QUICK -> Route(
                 answerRole = pick(ModelRole.FAST, ModelRole.STRONG),
                 plan = false, hops = false, llmVerify = false,
-                evidenceTokens = 500, maxSources = 5, answerWords = 120, answerTokens = 220, retrieveK = 8,
+                evidenceTokens = 500, maxSources = 5, answerWords = 90, answerTokens = 200, retrieveK = 8,
                 reason = "quick mode: fast model, compact evidence",
             )
             ResearchMode.DEEP -> Route(
@@ -42,38 +42,38 @@ object Router {
                 plan = true, hops = f.type == QuestionType.MULTIHOP || f.confidence < 0.7 || hard,
                 llmVerify = true,
                 evidenceTokens = if (ModelRole.DEEP in available) 900 else 1300,
-                maxSources = 8, answerWords = 350, answerTokens = 700, retrieveK = 14,
+                maxSources = 8, answerWords = 300, answerTokens = 600, retrieveK = 14,
                 reason = "deep mode: decomposition, strongest model, full verification",
             )
             ResearchMode.AUTO -> when (f.type) {
                 QuestionType.LOOKUP -> Route(
                     answerRole = pick(ModelRole.FAST, ModelRole.STRONG),
                     plan = false, hops = false, llmVerify = false,
-                    evidenceTokens = 550, maxSources = 5, answerWords = 120, answerTokens = 240, retrieveK = 8,
+                    evidenceTokens = 550, maxSources = 5, answerWords = 90, answerTokens = 200, retrieveK = 8,
                     reason = "lookup: fast model on compact evidence",
                 )
                 QuestionType.AMBIGUOUS -> Route(
                     answerRole = pick(ModelRole.FAST, ModelRole.STRONG),
                     plan = false, hops = false, llmVerify = false,
-                    evidenceTokens = 700, maxSources = 6, answerWords = 160, answerTokens = 300, retrieveK = 10,
+                    evidenceTokens = 700, maxSources = 6, answerWords = 140, answerTokens = 280, retrieveK = 10,
                     reason = "ambiguous: cover the main readings found",
                 )
                 QuestionType.EXPLANATION, QuestionType.NUMERIC -> Route(
                     answerRole = pick(ModelRole.STRONG, ModelRole.FAST),
                     plan = f.confidence < 0.6, hops = false, llmVerify = f.type == QuestionType.NUMERIC,
-                    evidenceTokens = 1000, maxSources = 6, answerWords = 220, answerTokens = 450, retrieveK = 10,
+                    evidenceTokens = 1000, maxSources = 6, answerWords = 180, answerTokens = 380, retrieveK = 10,
                     reason = "${f.type.name.lowercase()}: strong model",
                 )
                 QuestionType.COMPARISON, QuestionType.SYNTHESIS -> Route(
                     answerRole = pick(ModelRole.STRONG, ModelRole.DEEP, ModelRole.FAST),
                     plan = true, hops = false, llmVerify = true,
-                    evidenceTokens = 1200, maxSources = 8, answerWords = 280, answerTokens = 560, retrieveK = 12,
+                    evidenceTokens = 1100, maxSources = 8, answerWords = 220, answerTokens = 440, retrieveK = 12,
                     reason = "${f.type.name.lowercase()}: per-aspect retrieval, strong model",
                 )
                 QuestionType.MULTIHOP -> Route(
                     answerRole = pick(ModelRole.STRONG, ModelRole.DEEP, ModelRole.FAST),
                     plan = true, hops = true, llmVerify = true,
-                    evidenceTokens = 900, maxSources = 7, answerWords = 220, answerTokens = 450, retrieveK = 10,
+                    evidenceTokens = 900, maxSources = 7, answerWords = 160, answerTokens = 340, retrieveK = 10,
                     reason = "multi-hop: decomposition with per-hop extraction",
                 )
             }

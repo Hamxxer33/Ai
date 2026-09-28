@@ -38,6 +38,9 @@ object Verifier {
     private val CITE = Regex("\\[(\\d{1,2}(?:\\s*[,–-]\\s*\\d{1,2})*)]")
     private val CALC = Regex("[=×÷*/+]|\\b(times|divided|multiplied|minus|plus|approximately|about|roughly|total|sum|difference|ratio|per cent|percent)\\b", RegexOption.IGNORE_CASE)
     private val HEADING = Regex("^(#+\\s|\\*\\*[^*]+\\*\\*:?$|[-|: ]+$)")
+    // statements about the sources themselves ("the sources do not say ...") are not factual claims
+    private val META = Regex("\\b(the )?(provided |available |offline |cited )?(sources?|text|passages?|documents?|library)\\b.{0,60}\\b(do(es)? not|don't|doesn't|not|no|lack|omit|fail|missing|mention)|" +
+        "\\b(not (stated|mentioned|specified|given|provided)|no information|cannot (be )?determined|is missing)\\b", RegexOption.IGNORE_CASE)
 
     fun citations(s: String): List<Int> = CITE.findAll(s).flatMap { m ->
         m.groupValues[1].split(Regex("\\s*,\\s*")).flatMap { part ->
@@ -62,7 +65,7 @@ object Verifier {
             val body = CITE.replace(raw, " ").replace("**", "").trim()
             val stems = Text.stems(body)
             val invalid = cites.filter { it !in byN }
-            if (stems.size < 2 || HEADING.containsMatchIn(raw)) {
+            if (stems.size < 2 || HEADING.containsMatchIn(raw) || META.containsMatchIn(body)) {
                 return@map ClaimCheck(raw, cites, 0.0, true, invalid, Verdict.NOT_A_CLAIM)
             }
             val cited = cites.mapNotNull { byN[it] }
