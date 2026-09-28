@@ -46,7 +46,13 @@ object Router {
                 reason = "deep mode: decomposition, strongest model, full verification",
             )
             ResearchMode.AUTO -> when (f.type) {
-                QuestionType.LOOKUP -> Route(
+                // a low-confidence "lookup" is just an unrecognised question: long ones go to the strong model
+                QuestionType.LOOKUP -> if (f.confidence < 0.5 && f.words.size >= 6) Route(
+                    answerRole = pick(ModelRole.STRONG, ModelRole.FAST),
+                    plan = false, hops = false, llmVerify = false,
+                    evidenceTokens = 900, maxSources = 6, answerWords = 180, answerTokens = 380, retrieveK = 10,
+                    reason = "unrecognised question: strong model",
+                ) else Route(
                     answerRole = pick(ModelRole.FAST, ModelRole.STRONG),
                     plan = false, hops = false, llmVerify = false,
                     evidenceTokens = 550, maxSources = 5, answerWords = 90, answerTokens = 200, retrieveK = 8,

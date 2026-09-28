@@ -207,7 +207,7 @@ class ResearchEngine(
         // every fact in the answer must still come from the retrieved text.
         val scoutTitles = mutableListOf<String>()
         if (mode != ResearchMode.QUICK && plan.queries.isEmpty() &&
-            feats.type in setOf(QuestionType.LOOKUP, QuestionType.NUMERIC, QuestionType.MULTIHOP, QuestionType.AMBIGUOUS)
+            feats.type in setOf(QuestionType.LOOKUP, QuestionType.NUMERIC, QuestionType.MULTIHOP, QuestionType.AMBIGUOUS, QuestionType.EXPLANATION)
         ) {
             val fast = models.get(ModelRole.FAST) ?: models.get(ModelRole.STRONG)
             if (fast != null) {
@@ -245,10 +245,15 @@ class ResearchEngine(
         pool.values.sortedByDescending { it.score }.forEach { merged.putIfAbsent(it.chunk.packId to it.chunk.id, it) }
 
         // ---- 5. evidence
+        val broad = feats.type in setOf(QuestionType.SYNTHESIS, QuestionType.COMPARISON, QuestionType.MULTIHOP)
         val evidence = step("evidence", "Select evidence") {
             val ranked = merged.values.toList()
             val ev = EvidenceSelector.select(
-                q, ranked, EvidenceBudget(route.evidenceTokens, maxSources = route.maxSources),
+                q, ranked,
+                EvidenceBudget(
+                    route.evidenceTokens, maxSources = route.maxSources,
+                    minPerSource = if (broad) 2 else 1, relativeFloor = if (broad) 0.3 else 0.5,
+                ),
                 extraTerms = hopAnswers.filter { it.isNotBlank() } + feats.comparands,
                 semantic = sentenceScorer,
             )

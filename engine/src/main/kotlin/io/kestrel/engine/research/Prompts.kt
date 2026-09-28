@@ -34,7 +34,7 @@ Rules:
         QuestionType.COMPARISON -> "Compare point by point (a short list or a compact table), then give a one-sentence conclusion."
         QuestionType.MULTIHOP -> "Connect the findings step by step, showing how each fact leads to the next, then state the final answer."
         QuestionType.SYNTHESIS -> "Synthesise the sources into a structured overview with a few short sections or bullets."
-        QuestionType.NUMERIC -> "Quote the numbers you use from the sources, show the calculation line by line, then give the result."
+        QuestionType.NUMERIC -> "Quote the numbers you use from the sources with citations, then write the calculation once, cleanly (for example: 1865 - 1776 = 89), and state the result in one sentence."
         QuestionType.AMBIGUOUS -> "If the question could mean several things, briefly cover the main meanings found in the sources."
     }
 

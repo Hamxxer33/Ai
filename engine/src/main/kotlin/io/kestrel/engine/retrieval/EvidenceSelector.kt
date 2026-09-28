@@ -29,7 +29,14 @@ interface SentenceScorer {
     fun similarities(question: String, sentences: List<String>): List<Float>
 }
 
-data class EvidenceBudget(val maxTokens: Int, val maxSources: Int = 8, val minPerSource: Int = 1, val neighbours: Boolean = true)
+data class EvidenceBudget(
+    val maxTokens: Int,
+    val maxSources: Int = 8,
+    val minPerSource: Int = 1,
+    val neighbours: Boolean = true,
+    /** Sentences are kept while they score at least this fraction of the best one (lower = broader). */
+    val relativeFloor: Double = 0.5,
+)
 
 /**
  * Sentence-level evidence compression. A retrieved passage usually has one or two sentences that
@@ -121,11 +128,11 @@ object EvidenceSelector {
         // each strong source contributes its best sentence (breadth for synthesis and comparison)
         for (si in srcOrder) {
             bySrc[si]?.sortedByDescending { it.score }?.take(budget.minPerSource)
-                ?.filter { it.score >= 0.4 * best }?.forEach { take(it) }
+                ?.filter { it.score >= 0.8 * budget.relativeFloor * best }?.forEach { take(it) }
         }
         // then the best remaining sentences anywhere, while they stay close to the best one
         val allowed = srcOrder.toSet()
-        val floor = maxOf(0.15, 0.5 * best)
+        val floor = maxOf(0.12, budget.relativeFloor * best)
         for (c in cands.filter { it.src in allowed }.sortedByDescending { it.score }) {
             if (c.score < floor) break
             if (!take(c) && used > budget.maxTokens * 0.95) break

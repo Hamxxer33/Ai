@@ -249,6 +249,7 @@ class HybridRetriever(
         val raw = Regex("[\\p{L}\\p{N}]+(?:['’][\\p{L}]+)?").findAll(question).map { it.value }.toList()
         val grams = LinkedHashMap<String, Double>()
         val lowercaseSingles = HashSet<String>()
+        val namedGrams = HashSet<String>()
         for (n in 6 downTo 1) {
             for (i in 0..words.size - n) {
                 val g = words.subList(i, i + n)
@@ -259,13 +260,14 @@ class HybridRetriever(
                 val key = g.joinToString(" ")
                 grams.merge(key, strength) { a, b -> max(a, b) }
                 if (n == 1 && !capitalised) lowercaseSingles += key
+                if (capitalised) namedGrams += key
             }
         }
         for (e in entities) grams.merge(Text.normTitle(e), 1.0) { a, b -> max(a, b) }
         if (grams.isEmpty()) return emptyList()
         // lowercase single words ("ice", "tides") only stand in for the topic when the question
         // names no capitalised entity; otherwise they are generic ("country", "author")
-        val hasNamed = grams.keys.any { it !in lowercaseSingles }
+        val hasNamed = namedGrams.isNotEmpty() || entities.isNotEmpty()
         if (hasNamed) lowercaseSingles.forEach { grams.remove(it) }
         val hits = pack.lookupTitles(grams.keys)
         val result = mutableListOf<Linked>()

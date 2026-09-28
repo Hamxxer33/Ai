@@ -51,6 +51,8 @@ class TextTest {
         assertEquals(QuestionType.NUMERIC, QueryAnalyzer.analyze("How many years passed between 1776 and 1865?").type)
         assertEquals(QuestionType.LOOKUP, QueryAnalyzer.analyze("In what year did the Chernobyl disaster occur?").type)
         assertEquals(QuestionType.SYNTHESIS, QueryAnalyzer.analyze("Give an overview of the history of the Internet").type)
+        assertEquals(QuestionType.SYNTHESIS, QueryAnalyzer.analyze("Describe the major phases of World War II in Europe from 1939 to 1945.").type)
+        assertEquals(QuestionType.SYNTHESIS, QueryAnalyzer.analyze("Trace the career of Julius Caesar from his first consulship to his assassination.").type)
         assertEquals(QuestionType.MULTIHOP, QueryAnalyzer.analyze("Who directed the film that won Best Picture in 1998?").type)
         assertEquals(QuestionType.MULTIHOP, QueryAnalyzer.analyze("In which country was the author of The Little Prince born?").type)
         assertEquals(QuestionType.MULTIHOP, QueryAnalyzer.analyze("What is the capital of the country where Angkor Wat is located?").type)

@@ -52,7 +52,9 @@ object QueryAnalyzer {
         RegexOption.IGNORE_CASE,
     )
     private val SYNTH = Regex(
-        "\\b(overview|summari[sz]e|history of|evolution of|impact of|impacts of|effects? of|consequences of|" +
+        "^(describe|outline|trace|summari[sz]e|give an overview|give a timeline|discuss)\\b|" +
+            "\\b(overview|summari[sz]e|history of|evolution of|impact of|impacts of|effects? of|consequences of|" +
+            "timeline|phases of|stages of|main events|major events|career of|life of|life and work|contributions|" +
             "role of|influence of|significance of|causes and|main (causes|reasons|factors|arguments|theories|types)|" +
             "what are the (main|key|major)|state of|debate|arguments for|arguments against|survey|trends?)\\b",
         RegexOption.IGNORE_CASE,
