@@ -49,16 +49,20 @@ models: [docs/MODELS.md](docs/MODELS.md).
 | Benchmark | 165 questions, desktop and on-device runners, scorer; phone results pending |
 | Deep tier (streamed MoE) | load mode implemented; **not yet measured on a phone** |
 
-**Performance on a phone: not measured yet.** The table below is from the development VM (4-core
-x86 VM, AVX-512, no GPU) and exists only to show where time goes. The phone will be slower in
-prefill and similar in decode [estimate]. Numbers for the demo will come from the phone
-([docs/BENCHMARK.md](docs/BENCHMARK.md)).
+**Performance on a phone: not measured yet.** The numbers below come from the development VM
+(4-core x86, AVX-512, no GPU) with Qwen3.5-2B (fast) and Qwen3.5-4B (strong) on a 418k-article
+Wikipedia subset. They show where time goes. They are not phone numbers
+([benchmark/results](benchmark/results/README.md)):
 
-| Desktop VM, dev pack | Quick (2B) | Research, lookup with scout step (2B) | Research, comparison (plan + 2 aspects, 4B answer) |
-|---|---|---|---|
-| Total | 9-14 s | 23 s | 131 s (455-token answer; answer budgets since reduced) |
-| Retrieval | 0.15-0.6 s | 0.2-0.4 s | 1.7 s |
-| Time to first answer token | 3-3.8 s | 5.6-6.8 s | 14.5 s |
+| Desktop VM, 14-question sample (one per category) | Value |
+|---|---|
+| Lookups (article suggestion, hybrid search, 2B answer, check) | 6-8 s end to end, first word at ~2.5 s |
+| All 14 questions, median | 37 s end to end, first word at 8.2 s |
+| Retrieval over 3.1M passages (BM25 + titles + rerank) | 0.1-0.8 s |
+| Dense ANN over the vector index | 14-23 ms (partial index) |
+| Claims grounded in their cited sources | 84% |
+| Expert streaming, 7B-A1B MoE: anonymous memory | 221 MB (vs 3,455 MB without streaming) |
+| APK size | 9.9 MB (arm64, 7 per-CPU ggml backends) |
 
 ## Install and test
 

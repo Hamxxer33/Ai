@@ -41,3 +41,20 @@ Conclusions acted on:
    (165 questions total), and the demo questions (docs/DEMO_PLAN.md) favour multi-hop, false
    premises and non-existent entities.
 3. Evidence breadth and routing were fixed for synthesis and "describe/outline" questions (v2).
+
+## Sample 1 again, v2 pipeline, CPU not shared (`desktop-dev-sample1-v2.jsonl`)
+
+| Metric | v1 (contended) | v2 |
+|---|---|---|
+| Answer match | 83% | 83% |
+| Key-fact recall | 0.59 | 0.57 |
+| Abstention correct | 93% | 93% |
+| Claims grounded in cited sources | 77% | 84% |
+| Median latency (4-core x86 VM) | 73.9 s | 37.2 s |
+| Median time to first answer token | 17.2 s | 8.2 s |
+| Lookups (factual, obscure) end to end | 18-23 s | 6-8 s |
+
+Qualitatively, v2 answers the ice question from the density sentences (0.917 g/cm³, 9% expansion)
+instead of ice-shelf trivia. The Roman Empire synthesis draws on 8 sources instead of 5. The
+multi-hop miss (Benjamin Harrison) is a gap in the dev corpus. Phone numbers will differ: prefill
+on a Tensor CPU is expected to be slower than on this AVX-512 VM, and decode similar [estimate].
