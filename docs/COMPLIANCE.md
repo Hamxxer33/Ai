@@ -20,4 +20,4 @@ Legend: ✅ met and verifiable in this repository · 🔶 implemented, needs the
 | Models, datasets, indexes documented | ✅ | docs/MODELS.md (sources, licences), `tools/fetch_models.py` (SHA-256 pinned), docs/KNOWLEDGE_PACKS.md (dataset, schema, build commands) |
 | Demonstrate on real hardware | ⬜ | docs/DEMO_PLAN.md and docs/OFFLINE_TESTING.md give the recording protocol |
 | Difficult questions a basic 1B model struggles with | 🔶 | benchmark `--baseline memory` runs the small model alone on the same questions for a side-by-side comparison |
-| Benchmark 100-200 questions with per-question metrics | ✅ | 154 questions in 14 categories; each result records sources, answer, citation grounding, answer match, key-fact recall, latency, TTFT, tok/s, RSS, models, route, verification, thermal and battery |
+| Benchmark 100-200 questions with per-question metrics | ✅ | 165 questions in 15 categories; each result records sources, answer, citation grounding, answer match, key-fact recall, latency, TTFT, tok/s, RSS, models, route, verification, thermal and battery |

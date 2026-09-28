@@ -209,6 +209,20 @@ cat("multi_source", [
     ("r11", "Which country has the largest population: Brazil, Nigeria or Indonesia?", "Indonesia", ["Indonesia"]),
 ])
 
+cat("long_tail", [
+    ("lt01", "Who was the first woman to win the Nobel Prize in Literature, and in what year?", "Selma Lagerlöf", ["Lagerlöf", "1909"]),
+    ("lt02", "Which city hosted the first British Empire Games in 1930?", "Hamilton, Ontario", ["Hamilton"]),
+    ("lt03", "What is the currency of Bhutan?", "ngultrum", ["ngultrum"]),
+    ("lt04", "What is the capital of the Faroe Islands?", "Tórshavn", ["Tórshavn"], {"accept": ["Torshavn"]}),
+    ("lt05", "Which chemical element has atomic number 71?", "lutetium", ["lutetium"]),
+    ("lt06", "Which Mughal emperor built the Red Fort in Delhi?", "Shah Jahan", ["Shah Jahan"]),
+    ("lt07", "In what year was the Treaty of Tordesillas signed, and which two countries signed it?", "1494", ["1494", "Spain", "Portugal"]),
+    ("lt08", "Who were the architects of the Hagia Sophia built under Justinian?", "Isidore of Miletus and Anthemius of Tralles", ["Isidore", "Anthemius"]),
+    ("lt09", "Which planet does the moon Miranda orbit?", "Uranus", ["Uranus"]),
+    ("lt10", "In which year did the Great Molasses Flood happen in Boston?", "1919", ["1919"]),
+    ("lt11", "What is the highest mountain in Wales?", "Snowdon", ["Snowdon"], {"accept": ["Yr Wyddfa"]}),
+])
+
 out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "questions.jsonl")
 n = 0
 with open(out, "w", encoding="utf-8") as f:

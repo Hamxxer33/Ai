@@ -296,8 +296,19 @@ class ResearchEngine(
                 "TTFT ${"%.1f".format(r.stats.ttft_ms / 1000)}s, ${"%.1f".format(r.stats.decodeTokensPerSecond)} tok/s"
         }
 
+        // ---- 7b. arithmetic check: every "expression = result" the model wrote is recomputed
+        var finalAnswer = answer
+        val wrong = Arithmetic.checks(answer).filterNot { it.ok }
+        if (wrong.isNotEmpty()) {
+            val note = "\n\nCorrection (arithmetic re-checked on the device): " +
+                wrong.joinToString("; ") { "${it.expression} = ${Arithmetic.format(it.actual)}, not ${Arithmetic.format(it.claimed)}" } + "."
+            finalAnswer += note
+            listener(ResearchEvent.AnswerDelta(note))
+            steps += StepRecord("arith", "Check arithmetic", StepStatus.DONE, "${wrong.size} calculation(s) corrected", 0)
+        }
+
         // ---- 8. verification
-        var report = Verifier.check(answer, evidence, q, feats.type == QuestionType.NUMERIC)
+        var report = Verifier.check(finalAnswer, evidence, q, feats.type == QuestionType.NUMERIC)
         if (route.llmVerify) {
             val weak = report.claims.withIndex()
                 .filter { it.value.verdict == Verdict.WEAK || it.value.verdict == Verdict.UNSUPPORTED || it.value.verdict == Verdict.UNCITED }
@@ -321,7 +332,7 @@ class ResearchEngine(
         listener(ResearchEvent.Verified(report))
 
         return ResearchAnswer(
-            question, q, feats.type, mode, route, answer, evidence, report, hops, false, steps, calls,
+            question, q, feats.type, mode, route, finalAnswer, evidence, report, hops, false, steps, calls,
             retrievalMs, System.currentTimeMillis() - t0, model.id, linked.distinct(),
         )
     }

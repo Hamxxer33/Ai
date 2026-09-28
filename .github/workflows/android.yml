@@ -76,7 +76,7 @@ jobs:
       - name: Offline audit
         run: |
           scripts/verify_offline.sh app/build/outputs/apk/release/app-release.apk
-          echo "native libraries:"; unzip -l app/build/outputs/apk/release/app-release.apk | grep "lib/arm64-v8a/"
+          echo "native libraries and assets:"; unzip -l app/build/outputs/apk/release/app-release.apk | grep -E "lib/arm64-v8a/|assets/"
       - name: Rename and checksum
         run: |
           mkdir -p dist

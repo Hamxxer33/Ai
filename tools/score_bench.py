@@ -25,7 +25,7 @@ from collections import defaultdict
 
 CATEGORY_ORDER = ["factual", "obscure", "multi_hop", "comparison", "explanation", "historical_analysis",
                   "scientific", "technical", "numerical", "synthesis", "contradictory", "long_context",
-                  "hallucination_probe", "multi_source"]
+                  "hallucination_probe", "multi_source", "long_tail"]
 
 
 def load(path):

@@ -40,5 +40,5 @@ this comparison reproducible.
 
 * Runtime benchmark: prompt and generation speed of each model tier, load time.
 * Per question: time to first word, total time, prompt tokens (cached vs. read), model used.
-* Benchmark summary over all 154 questions: accuracy per category, abstention accuracy, grounded
+* Benchmark summary over all 165 questions: accuracy per category, abstention accuracy, grounded
   claim rate, median latency, peak RSS.

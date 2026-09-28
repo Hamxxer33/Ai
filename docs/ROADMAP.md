@@ -17,7 +17,7 @@ test (travel). Status: ✅ done, 🔶 in progress, ⬜ planned.
   numeric + model check)
 * ✅ Android app: Compose UI, citations, research trace, grounding, Library, Benchmark, Settings,
   Offline badge, no INTERNET permission
-* ✅ Benchmark: 154 questions in 14 categories, desktop and on-device runners, scorer, grading sheet
+* ✅ Benchmark: 165 questions in 15 categories, desktop and on-device runners, scorer, grading sheet
 * ✅ CI: tests, APK build, offline audit, release on tag
 
 ## Next

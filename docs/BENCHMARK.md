@@ -2,7 +2,7 @@
 
 ## Question set
 
-`benchmark/questions.jsonl` has 154 questions, 11 in each of 14 categories, generated from
+`benchmark/questions.jsonl` has 165 questions, 11 in each of 15 categories, generated from
 `benchmark/make_questions.py` (edit there, then regenerate):
 
 | Category | What it tests |
@@ -21,6 +21,7 @@
 | long_context | many details spread through long articles |
 | hallucination_probe | false premises and non-existent entities; the correct behaviour is to correct or refuse |
 | multi_source | facts from several articles combined |
+| long_tail | less-known facts that small models tend to misremember |
 
 Each question has a short gold answer (optional), accepted alternatives, key facts, an
 `expect_abstain` flag for questions about non-existent things, and notes.

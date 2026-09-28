@@ -46,7 +46,7 @@ models: [docs/MODELS.md](docs/MODELS.md).
 | Android app | builds in CI (see Actions); **not yet run on a phone** |
 | Knowledge pack builder | working (Wikipedia parquet, jsonl, plain text); dev pack built (418k articles) |
 | Vectors | builder and index working; dev pack partially embedded |
-| Benchmark | 154 questions, desktop and on-device runners, scorer; phone results pending |
+| Benchmark | 165 questions, desktop and on-device runners, scorer; phone results pending |
 | Deep tier (streamed MoE) | load mode implemented; **not yet measured on a phone** |
 
 **Performance on a phone: not measured yet.** The table below is from the development VM (4-core
@@ -88,7 +88,7 @@ Building from source: [docs/BUILDING.md](docs/BUILDING.md). What comes next: [do
 | `app/` | Android app (Kotlin, Jetpack Compose) |
 | `bench/` | desktop CLI running the same engine and native code |
 | `tools/` | pack builder, embeddings and vector index, model fetcher, benchmark scorer |
-| `benchmark/` | question set (154 questions, 14 categories) |
+| `benchmark/` | question set (165 questions, 15 categories) |
 | `scripts/` | native host build, offline audit, adb helpers |
 
 ## Licences
