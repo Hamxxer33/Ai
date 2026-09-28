@@ -73,6 +73,14 @@ class Settings(context: Context) {
         get() = p.getBoolean("use_vectors", true)
         set(v) = p.edit().putBoolean("use_vectors", v).apply()
 
+    var highPriority: Boolean
+        get() = p.getBoolean("high_priority", true)
+        set(v) = p.edit().putBoolean("high_priority", v).apply()
+
+    var pinBigCores: Boolean
+        get() = p.getBoolean("pin_big_cores", true)
+        set(v) = p.edit().putBoolean("pin_big_cores", v).apply()
+
     var memoryBudgetMb: Int
         get() = p.getInt("memory_budget_mb", 0)
         set(v) = p.edit().putInt("memory_budget_mb", v).apply()

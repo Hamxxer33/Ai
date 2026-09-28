@@ -28,7 +28,13 @@
 #include "chat.h"
 #include "common.h"
 #include "ggml-backend.h"
+#include "ggml-cpu.h"
 #include "llama.h"
+
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#include <unistd.h>
+#include <cerrno>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -249,6 +255,8 @@ struct Snapshot {
 };
 
 struct Context {
+    ggml_threadpool * tp = nullptr;
+    void (*tp_free)(ggml_threadpool *) = nullptr;
     std::vector<Snapshot> snaps;  // LRU, at most kMaxSnaps
     uint64_t tick = 0;
     Model * owner = nullptr;
@@ -464,7 +472,45 @@ JNIEXPORT void JNICALL JNI_FN(contextFree)(JNIEnv *, jclass, jlong handle) {
     c->cancel.store(true);
     std::lock_guard<std::mutex> lk(c->busy);
     llama_free(c->ctx);
+    if (c->tp && c->tp_free) c->tp_free(c->tp);
     delete c;
+}
+
+// Sets the nice value of the calling thread. Threads it creates afterwards (ggml's compute
+// threads) inherit it. Returns 0 or errno.
+JNIEXPORT jint JNICALL JNI_FN(setThreadNice)(JNIEnv *, jclass, jint nice) {
+    const pid_t tid = static_cast<pid_t>(syscall(SYS_gettid));
+    return setpriority(PRIO_PROCESS, static_cast<id_t>(tid), nice) == 0 ? 0 : errno;
+}
+
+// Replaces the context's compute threads with a persistent pool whose threads may only run on the
+// given CPUs (the phone's big cores). strict = one thread per CPU. Must be called from the thread
+// that will run generation (the pool threads inherit its nice value).
+JNIEXPORT jboolean JNICALL JNI_FN(contextSetThreadpool)(JNIEnv * env, jclass, jlong handle, jintArray jCpus, jboolean strict) {
+    auto * c = reinterpret_cast<Context *>(handle);
+    std::lock_guard<std::mutex> lk(c->busy);
+    ggml_backend_dev_t dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    if (!dev) return JNI_FALSE;
+    ggml_backend_reg_t reg = ggml_backend_dev_backend_reg(dev);
+    auto * new_fn = reinterpret_cast<decltype(ggml_threadpool_new) *>(ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_new"));
+    auto * free_fn = reinterpret_cast<decltype(ggml_threadpool_free) *>(ggml_backend_reg_get_proc_address(reg, "ggml_threadpool_free"));
+    if (!new_fn || !free_fn) return JNI_FALSE;
+    ggml_threadpool_params p;
+    ggml_threadpool_params_init(&p, llama_n_threads(c->ctx));
+    const jsize n = jCpus ? env->GetArrayLength(jCpus) : 0;
+    std::vector<jint> cpus(static_cast<size_t>(n));
+    if (n > 0) env->GetIntArrayRegion(jCpus, 0, n, cpus.data());
+    for (jint cpu : cpus) if (cpu >= 0 && cpu < GGML_MAX_N_THREADS) p.cpumask[cpu] = true;
+    p.strict_cpu = strict;
+    p.prio = GGML_SCHED_PRIO_NORMAL;  // keep the inherited nice value; SCHED_FIFO is not allowed for apps
+    ggml_threadpool * tp = new_fn(&p);
+    if (!tp) return JNI_FALSE;
+    llama_detach_threadpool(c->ctx);
+    if (c->tp && c->tp_free) c->tp_free(c->tp);
+    llama_attach_threadpool(c->ctx, tp, nullptr);
+    c->tp = tp;
+    c->tp_free = free_fn;
+    return JNI_TRUE;
 }
 
 JNIEXPORT void JNICALL JNI_FN(cancel)(JNIEnv *, jclass, jlong handle) {

@@ -145,6 +145,12 @@ data class LoadOptions(
     val repack: Boolean = true,
     val flashAttention: Int = -1,
     val gpuLayers: Int = 0,
+    /** CPUs the compute threads may use (the big cores); null = OS default placement. */
+    val cpus: IntArray? = null,
+    /** One compute thread per listed CPU. */
+    val strictCpu: Boolean = false,
+    /** Nice value for the inference threads (e.g. -10); null = unchanged. */
+    val nice: Int? = null,
 )
 
 private val json = Json { ignoreUnknownKeys = true }
@@ -247,19 +253,31 @@ class LlamaModel private constructor(
             if (opts.mlock) flags = flags or LlamaNative.FLAG_MLOCK
             if (opts.streamExperts) flags = flags or LlamaNative.FLAG_STREAM_EXPERTS
             if (!opts.repack) flags = flags or LlamaNative.FLAG_NO_REPACK
-            val m = LlamaNative.modelLoad(path.toByteArray(), flags, opts.gpuLayers)
-            val info = json.decodeFromString(ModelInfo.serializer(), String(LlamaNative.modelInfo(m), Charsets.UTF_8))
-            val ctx = try {
-                LlamaNative.contextCreate(
-                    m, opts.contextSize, opts.batchSize, opts.batchSize, opts.threads, opts.threadsBatch,
-                    false, -1, opts.flashAttention, 1,
-                )
-            } catch (t: Throwable) {
-                LlamaNative.modelFree(m)
-                throw t
-            }
             val ex = Executors.newSingleThreadExecutor { r -> Thread(r, "llm-$id").apply { isDaemon = true } }
-            return LlamaModel(id, m, ctx, info, ex.asCoroutineDispatcher(), ex)
+            // Everything that creates compute threads runs on the model's own thread, so they
+            // inherit its priority, and generation later runs on the same thread.
+            val created = runCatching {
+                ex.submit<Triple<Long, Long, ModelInfo>> {
+                    opts.nice?.let { LlamaNative.setThreadNice(it) }
+                    val m = LlamaNative.modelLoad(path.toByteArray(), flags, opts.gpuLayers)
+                    val info = json.decodeFromString(ModelInfo.serializer(), String(LlamaNative.modelInfo(m), Charsets.UTF_8))
+                    val ctx = try {
+                        LlamaNative.contextCreate(
+                            m, opts.contextSize, opts.batchSize, opts.batchSize, opts.threads, opts.threadsBatch,
+                            false, -1, opts.flashAttention, 1,
+                        )
+                    } catch (t: Throwable) {
+                        LlamaNative.modelFree(m)
+                        throw t
+                    }
+                    if (opts.cpus != null && opts.cpus.isNotEmpty()) LlamaNative.contextSetThreadpool(ctx, opts.cpus, opts.strictCpu)
+                    Triple(m, ctx, info)
+                }.get()
+            }.getOrElse { e ->
+                ex.shutdown()
+                throw (e as? java.util.concurrent.ExecutionException)?.cause ?: e
+            }
+            return LlamaModel(id, created.first, created.second, created.third, ex.asCoroutineDispatcher(), ex)
         }
     }
 }

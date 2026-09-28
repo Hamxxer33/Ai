@@ -12,7 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Info
-import androidx.compose.material.icons.filled.List
+import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -76,7 +76,7 @@ private fun Root(container: AppContainer) {
             NavigationBar {
                 val items = listOf(
                     Triple("Research", Icons.Filled.Search, 0),
-                    Triple("Library", Icons.Filled.List, 1),
+                    Triple("Library", Icons.AutoMirrored.Filled.List, 1),
                     Triple("Benchmark", Icons.Filled.Info, 2),
                     Triple("Settings", Icons.Filled.Settings, 3),
                 )

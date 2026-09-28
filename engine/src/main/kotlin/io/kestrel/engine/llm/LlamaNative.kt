@@ -55,6 +55,8 @@ object LlamaNative {
     ): Long
     @JvmStatic external fun contextFree(ctx: Long)
     @JvmStatic external fun cancel(ctx: Long)
+    @JvmStatic external fun setThreadNice(nice: Int): Int
+    @JvmStatic external fun contextSetThreadpool(ctx: Long, cpus: IntArray?, strict: Boolean): Boolean
     @JvmStatic external fun kvClear(ctx: Long)
     @JvmStatic external fun generate(ctx: Long, prompt: ByteArray, paramsJson: ByteArray, sink: ByteSink?): ByteArray
     @JvmStatic external fun embed(ctx: Long, texts: Array<ByteArray>, normalize: Boolean): Array<FloatArray>

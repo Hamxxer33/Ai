@@ -40,7 +40,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.KeyboardArrowUp
-import androidx.compose.material.icons.filled.Send
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -117,7 +117,7 @@ fun ResearchScreen(vm: ResearchViewModel, container: AppContainer) {
             if (running) {
                 FilledIconButton(onClick = { vm.stop() }) { Icon(Icons.Filled.Close, "Stop") }
             } else {
-                FilledIconButton(onClick = { vm.ask(input); input = "" }, enabled = input.isNotBlank()) { Icon(Icons.Filled.Send, "Ask") }
+                FilledIconButton(onClick = { vm.ask(input); input = "" }, enabled = input.isNotBlank()) { Icon(Icons.AutoMirrored.Filled.Send, "Ask") }
             }
         }
     }

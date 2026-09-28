@@ -69,6 +69,8 @@ class AndroidModelProvider(
     private val catalog: ModelCatalog,
     private val settings: Settings,
     private val device: DeviceInfo,
+    /** Loads the native library and the per-CPU ggml backends from the app's lib directory. */
+    private val ensureNative: () -> Unit,
 ) : ModelProvider {
     private val mutex = Mutex()
     private val loaded = LinkedHashMap<String, Pair<ModelRole, LlamaModel>>() // path -> model
@@ -82,6 +84,7 @@ class AndroidModelProvider(
 
     override suspend fun get(role: ModelRole): LanguageModel? = mutex.withLock {
         val file = catalog.byRole()[role] ?: return@withLock null
+        ensureNative()
         loaded[file.absolutePath]?.let { return@withLock it.second }
         // memory policy: deep and strong are mutually exclusive
         val conflicting = when (role) {
@@ -106,6 +109,9 @@ class AndroidModelProvider(
                         batchSize = 512,
                         threads = threads,
                         streamExperts = role == ModelRole.DEEP && settings.streamExperts,
+                        cpus = if (settings.pinBigCores) device.bigCoreIds().takeIf { it.size >= threads } else null,
+                        strictCpu = settings.pinBigCores && device.bigCoreIds().size == threads,
+                        nice = if (settings.highPriority) -10 else null,
                     ),
                 )
             }
@@ -127,6 +133,7 @@ class AndroidModelProvider(
         val f = files.firstOrNull { preferredFile != null && it.name.equals(preferredFile, ignoreCase = true) } ?: files.firstOrNull()
             ?: return@withLock null
         embedder?.let { if (it.first == f.absolutePath) return@withLock it.second else it.second.close() }
+        ensureNative()
         val e = withContext(Dispatchers.IO) { LlamaEmbedder.load(f.nameWithoutExtension, f.absolutePath, threads.coerceAtMost(4), 512, 4) }
         embedder = f.absolutePath to e
         e

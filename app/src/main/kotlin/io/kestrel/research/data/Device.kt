@@ -34,6 +34,14 @@ class DeviceInfo(private val context: Context) {
         return f.count { it >= top * 0.7 }.coerceIn(2, 8)
     }
 
+    /** Indices of the big cores, for pinning compute threads. */
+    fun bigCoreIds(): IntArray {
+        val f = coreMaxFreqs()
+        val top = f.maxOrNull() ?: 0L
+        if (top <= 0) return IntArray(0)
+        return f.indices.filter { f[it] >= top * 0.7 }.toIntArray()
+    }
+
     fun airplaneMode(): Boolean = Settings.Global.getInt(context.contentResolver, Settings.Global.AIRPLANE_MODE_ON, 0) == 1
 
     /** True when this package cannot open network sockets at all (INTERNET not granted). */

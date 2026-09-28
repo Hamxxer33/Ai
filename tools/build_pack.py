@@ -135,6 +135,7 @@ def split_paragraphs(text: str):
 
 # --------------------------------------------------------------------------- chunking
 
+EMPTY_PARENS = re.compile(r"\s*\((?:\s|[;,])*\)")
 SKIP_SECTIONS = {"references", "external links", "see also", "further reading", "notes", "bibliography",
                  "sources", "citations", "footnotes", "works cited"}
 
@@ -149,6 +150,7 @@ def chunk_article(paras, target_words=150, max_words=230):
     section = ""
     buf, n = [], 0
     for p in paras:
+        p = EMPTY_PARENS.sub("", p)
         if is_heading(p):
             if buf:
                 yield section, " ".join(buf)
@@ -282,7 +284,8 @@ def main():
 
     rows = []
     for title, paras, url in articles:
-        title = title.strip()
+        # dumps with stripped pronunciations leave "Canberra ()" style titles
+        title = re.sub(r"\s*\(\s*[;,]?\s*\)", "", title).strip()
         if not title or title in seen_titles:
             continue
         words = sum(len(p.split()) for p in paras)

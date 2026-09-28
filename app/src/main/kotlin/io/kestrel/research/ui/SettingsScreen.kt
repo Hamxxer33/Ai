@@ -59,6 +59,8 @@ fun SettingsScreen(container: AppContainer) {
             Text("Model memory budget: ${if (budget.toInt() == 0) "auto" else "${budget.toInt()} MB"}", fontSize = 13.sp)
             Slider(value = budget, onValueChange = { budget = (it / 250).toInt() * 250f }, valueRange = 0f..9000f, onValueChangeFinished = { s.memoryBudgetMb = budget.toInt() })
             ToggleRow("Stream MoE experts from storage (deep model)", s.streamExperts) { s.streamExperts = it; scope.launch { container.invalidate() } }
+            ToggleRow("Pin inference threads to big cores (${container.device.bigCoreIds().joinToString(",")})", s.pinBigCores) { s.pinBigCores = it; scope.launch { container.invalidate() } }
+            ToggleRow("High-priority inference threads", s.highPriority) { s.highPriority = it; scope.launch { container.invalidate() } }
             ToggleRow("Dense vector retrieval (when a pack has vectors)", s.useVectors) { s.useVectors = it; scope.launch { container.invalidate() } }
         }
 

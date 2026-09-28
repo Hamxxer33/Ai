@@ -4,7 +4,9 @@ import android.app.Application
 import io.kestrel.engine.llm.LlamaNative
 import io.kestrel.engine.research.ResearchEngine
 import io.kestrel.engine.retrieval.HybridRetriever
+import io.kestrel.engine.retrieval.EmbeddingSentenceScorer
 import io.kestrel.engine.retrieval.QueryEncoder
+import io.kestrel.engine.retrieval.SentenceScorer
 import io.kestrel.engine.store.KnowledgePack
 import io.kestrel.research.data.AndroidModelProvider
 import io.kestrel.research.data.AndroidSqlDb
@@ -33,7 +35,7 @@ class AppContainer(val app: Application) {
     val device = DeviceInfo(app)
     val storage = Storage(app, device).also { it.ensureDirs() }
     val catalog = ModelCatalog(storage, settings)
-    val runtime = AndroidModelProvider(catalog, settings, device)
+    val runtime = AndroidModelProvider(catalog, settings, device) { nativeReady.getOrThrow() }
 
     private val lock = Mutex()
     private var engine: ResearchEngine? = null
@@ -62,15 +64,18 @@ class AppContainer(val app: Application) {
         }
         packs = opened
         val encoders = HashMap<String, QueryEncoder>()
+        var scorer: SentenceScorer? = null
         if (settings.useVectors) {
             for (p in opened) {
                 val spec = p.manifest.embedding ?: continue
                 if (p.vectors == null) continue
                 val emb = runCatching { runtime.embedder(spec.file) }.getOrNull() ?: continue
                 encoders[p.id] = QueryEncoder(emb, spec.query_prefix, spec.dim, spec.transform)
+                // the same model also reranks candidate evidence sentences against the question
+                if (scorer == null) scorer = EmbeddingSentenceScorer(emb, spec.query_prefix, spec.doc_prefix, maxSentences = 32)
             }
         }
-        ResearchEngine(HybridRetriever(opened, encoders), runtime).also { engine = it }
+        ResearchEngine(HybridRetriever(opened, encoders), runtime, sentenceScorer = scorer).also { engine = it }
     }
 
     /** Drop the engine so the next question re-scans models and packs. */
