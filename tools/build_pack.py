@@ -236,6 +236,9 @@ def main():
     ap.add_argument("--limit-bytes", type=int, default=0, help="plain-titles: stop after this many bytes")
     ap.add_argument("--lead-only-after", type=int, default=0,
                     help="keep only the first 2 chunks of articles after the first N (0 = keep all)")
+    ap.add_argument("--full-min-words", type=int, default=0,
+                    help="articles shorter than this keep only their first 2 chunks (size control; long "
+                         "articles are usually the important ones). 0 = keep everything")
     ap.add_argument("--no-compress", action="store_true")
     args = ap.parse_args()
 
@@ -290,7 +293,7 @@ def main():
         seen_titles.add(title)
         doc_id += 1
         chunks = list(chunk_article(paras))
-        if args.lead_only_after and doc_id > args.lead_only_after:
+        if (args.lead_only_after and doc_id > args.lead_only_after) or (args.full_min_words and words < args.full_min_words):
             chunks = chunks[:2]
         if not chunks:
             doc_id -= 1

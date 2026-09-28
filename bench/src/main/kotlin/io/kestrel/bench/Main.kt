@@ -199,12 +199,30 @@ private fun bench(o: Opts) = runBlocking {
         out.writeText(""); emptySet()
     }
     val forced = o.get("mode")?.let { mode(o) }
+    val memoryBaseline = o.get("baseline") == "memory"
     for ((i, q) in qs.withIndex()) {
         if (q.id in done) continue
-        val r = runner.run(q, forced)
+        val r = if (memoryBaseline) memoryOnly(engine, runner, q) else runner.run(q, forced)
         out.appendText(runner.encode(r) + "\n")
         System.err.println("[${i + 1}/${qs.size}] ${q.id} ${r.total_ms}ms match=${r.answer_match} facts=${r.key_fact_recall} abstain_ok=${r.abstain_correct} supported=${r.claims_supported}/${r.claims_checkable} ${r.error ?: ""}")
     }
+}
+
+/** Baseline for the "a small model alone" comparison: the model answers from memory, no retrieval. */
+private suspend fun memoryOnly(engine: ResearchEngine, runner: BenchmarkRunner, q: io.kestrel.engine.bench.BenchQuestion): io.kestrel.engine.bench.BenchResult {
+    val t0 = System.currentTimeMillis()
+    val text = engine.answerFromMemory(q.question) { }
+    val ms = System.currentTimeMillis() - t0
+    val targets = listOf(q.answer).filter { it.isNotBlank() } + q.accept
+    val abst = Regex("(don't know|do not know|not sure|no information|cannot|can't|unable|not aware|doesn't exist|does not exist|no record|fictional)", RegexOption.IGNORE_CASE).containsMatchIn(text)
+    val (rss, peak) = io.kestrel.engine.bench.MemoryProbe.rss()
+    return io.kestrel.engine.bench.BenchResult(
+        q.id, q.category, q.question, q.question, "MEMORY", "", "memory-only baseline", null, emptyList(), text, abst,
+        emptyList(), emptyList(), emptyList(),
+        if (targets.isEmpty() || q.expect_abstain) null else targets.any { io.kestrel.engine.bench.Scoring.matches(text, it) },
+        if (q.key_facts.isEmpty()) null else q.key_facts.count { io.kestrel.engine.bench.Scoring.matches(text, it) }.toDouble() / q.key_facts.size,
+        if (q.expect_abstain) abst else !abst, 0, 0, 0, 0, false, ms, 0, null, null, null, emptyList(), rss, peak, emptyList(),
+    )
 }
 
 private fun speed(o: Opts) = runBlocking {
