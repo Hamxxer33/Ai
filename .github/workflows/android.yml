@@ -1,0 +1,81 @@
+name: build
+
+on:
+  push:
+    branches: ["**"]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  engine:
+    name: Engine tests (JVM)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Unit tests
+        run: ./gradlew -Pkestrel.jvmOnly=true :engine:test --console=plain
+      - name: Pack builder smoke test
+        run: |
+          python3 - <<'PY'
+          import json
+          with open("/tmp/sample.jsonl", "w") as f:
+              f.write(json.dumps({"title": "Eiffel Tower", "text": "The Eiffel Tower is a wrought-iron lattice tower in Paris. It was completed in 1889 for the World's Fair and is named after Gustave Eiffel, whose company built it. " * 3}) + "\n")
+              f.write(json.dumps({"title": "Benjamin Harrison", "text": "Benjamin Harrison was the 23rd president of the United States from 1889 to 1893. He was a lawyer from Indiana and a grandson of William Henry Harrison. " * 3}) + "\n")
+          PY
+          python3 tools/build_pack.py --format jsonl --input /tmp/sample.jsonl --out /tmp/pack --id sample --name Sample --min-words 10
+          python3 benchmark/make_questions.py
+
+  android:
+    name: Android APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install NDK and CMake
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;29.0.14206865" "cmake;3.22.1" "platforms;android-36" "build-tools;36.0.0" > /dev/null
+      - name: Decode signing key (optional)
+        env:
+          KEYSTORE_B64: ${{ secrets.KESTREL_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KEYSTORE_B64" ]; then echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"; echo "KESTREL_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"; fi
+      - name: Build release APK
+        env:
+          KESTREL_KEYSTORE_PASSWORD: ${{ secrets.KESTREL_KEYSTORE_PASSWORD }}
+          KESTREL_KEY_ALIAS: ${{ secrets.KESTREL_KEY_ALIAS }}
+          KESTREL_KEY_PASSWORD: ${{ secrets.KESTREL_KEY_PASSWORD }}
+        run: ./gradlew :app:assembleRelease --console=plain --stacktrace
+      - name: Offline audit
+        run: scripts/verify_offline.sh app/build/outputs/apk/release/app-release.apk
+      - name: Rename and checksum
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk dist/kestrel-${GITHUB_REF_NAME//\//-}-arm64.apk
+          cd dist && sha256sum *.apk > SHA256SUMS && cat SHA256SUMS && ls -la
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kestrel-apk
+          path: dist/
+          if-no-files-found: error
+      - name: Publish GitHub release (tags only)
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "Kestrel $GITHUB_REF_NAME" --notes-file docs/RELEASE_NOTES.md || gh release upload "$GITHUB_REF_NAME" dist/* --clobber

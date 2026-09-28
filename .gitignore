@@ -1,0 +1,20 @@
+.gradle/
+build/
+local.properties
+*.iml
+.idea/
+.kotlin/
+captures/
+.externalNativeBuild/
+.cxx/
+keystore.properties
+*.jks
+*.keystore
+# large assets are never committed
+*.gguf
+packs/
+models/
+/data/
+__pycache__/
+*.pyc
+bench-results*.jsonl
