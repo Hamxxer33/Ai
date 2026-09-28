@@ -60,3 +60,27 @@ Chosen for the first on-device measurements. Each is replaceable from Settings â
 
 Exact filenames, sources and SHA-256 are recorded in `models/models.lock.json` when the files
 are fetched by `tools/fetch_models.py`.
+
+## Expert streaming: what the load mode does (measured)
+
+`LoadOptions.streamExperts` (the deep tier) loads the GGUF memory-mapped and turns off llama.cpp's
+weight repacking for that model. Every weight then stays file-backed. The kernel pages routed
+experts in from flash on demand and can drop them again under memory pressure, instead of the
+low-memory killer ending the app.
+
+Why repacking has to be off: upstream llama.cpp copies every tensor it can repack into anonymous
+memory, even when a tensor override points the experts at the plain CPU buffer type (the loader
+then considers the repack buffer types again). Measured with the desktop CLI
+(`bench speed --stream-experts`) on Granite-4.0-H-Tiny Q4_K_M (7B total / 1B active, 4.2 GB file),
+4-core x86 VM:
+
+| Mode | Anonymous RSS | File-backed RSS | Prompt speed (795 tokens) |
+|---|---|---|---|
+| default (repack on) | 3,455 MB | 752 MB | 37 tok/s |
+| stream experts (repack off) | 221 MB | 4,063 MB (evictable) | 55-63 tok/s |
+
+On a 12 GB phone a 12-13 GB MoE file cannot stay fully resident. Only the default mode would
+exceed the memory limit; with streaming the file-backed working set competes with the page cache
+instead. The cost: dense tensors lose the ARM repack kernels. A small llama.cpp patch that
+repacks only non-expert tensors is on the roadmap. Decode and prompt speed of streamed MoE on a
+Pixel are **not measured yet**.

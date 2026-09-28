@@ -55,5 +55,30 @@ class DeviceInfo(private val context: Context) {
 
     fun hasAllFilesAccess(): Boolean = Environment.isExternalStorageManager()
 
+    /** Thermal and battery state, recorded with every benchmark answer. */
+    fun probe(): Map<String, String> {
+        val out = LinkedHashMap<String, String>()
+        runCatching {
+            val pm = context.getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
+            out["thermal_status"] = pm.currentThermalStatus.toString()
+            out["thermal_headroom_10s"] = "%.3f".format(pm.getThermalHeadroom(10))
+        }
+        runCatching {
+            val bm = context.getSystemService(Context.BATTERY_SERVICE) as android.os.BatteryManager
+            out["battery_pct"] = bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CAPACITY).toString()
+            out["battery_current_ua"] = bm.getIntProperty(android.os.BatteryManager.BATTERY_PROPERTY_CURRENT_NOW).toString()
+            out["charging"] = bm.isCharging.toString()
+        }
+        runCatching {
+            val i = context.registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+            i?.getIntExtra(android.os.BatteryManager.EXTRA_TEMPERATURE, Int.MIN_VALUE)?.takeIf { it != Int.MIN_VALUE }
+                ?.let { out["battery_temp_c"] = "%.1f".format(it / 10.0) }
+        }
+        val m = memory()
+        out["avail_mem_mb"] = m.availMb.toString()
+        out["low_memory"] = m.lowMemory.toString()
+        return out
+    }
+
     fun describe(): String = "${Build.MANUFACTURER} ${Build.MODEL} (${Build.SOC_MODEL}), Android ${Build.VERSION.RELEASE}"
 }

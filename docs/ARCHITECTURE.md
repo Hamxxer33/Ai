@@ -83,11 +83,12 @@ a 12 GB Pixel; the low-memory killer would take the app down under normal Androi
 survives as a *configuration* of C: the deep tier accepts any GGUF, so a resident mid-size
 MoE can be measured with the same benchmark.
 
-**MoE and expert streaming in C.** The deep tier loads with mmap. Tensors that are not experts
-(attention, DeltaNet, shared experts, embeddings) are placed in llama.cpp's CPU repack buffer
-(anonymous memory, fast ARM GEMM kernels). Routed experts stay file-backed, so the kernel page
-cache streams them from flash on demand. This is the cheapest correct form of expert streaming
-and needs no engine fork. A dedicated expert cache with router-driven prefetch
+**MoE and expert streaming in C.** The deep tier loads with mmap and with weight repacking turned
+off, so every tensor stays file-backed. The kernel page cache streams routed experts from flash on
+demand and evicts them under pressure. This is the cheapest correct form of expert streaming and
+needs no engine fork. Measured: anonymous memory falls from 3.45 GB to 0.22 GB on a 7B-A1B MoE
+(docs/MODELS.md). Keeping the dense tensors (attention, DeltaNet, shared experts) in the fast ARM
+repack format while experts stream needs a small llama.cpp patch (ROADMAP). A dedicated expert cache with router-driven prefetch
 (BigMoeOnEdge-style) is the next step **only if** the on-device benchmark shows page-cache
 streaming is the bottleneck. See ROADMAP.md.
 

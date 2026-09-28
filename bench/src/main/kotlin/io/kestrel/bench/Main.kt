@@ -228,12 +228,17 @@ private suspend fun memoryOnly(engine: ResearchEngine, runner: BenchmarkRunner, 
 private fun speed(o: Opts) = runBlocking {
     val path = o.get("model") ?: error("--model")
     val t0 = System.currentTimeMillis()
-    val m = LlamaModel.load("speed", path, LoadOptions(contextSize = 4096, threads = threads(o)))
-    println("load ${System.currentTimeMillis() - t0} ms  ${m.info}")
+    val stream = o.get("stream-experts") == "true"
+    val m = LlamaModel.load("speed", path, LoadOptions(contextSize = 4096, threads = threads(o), streamExperts = stream))
+    val (rss0, _) = io.kestrel.engine.bench.MemoryProbe.rss()
+    println("load ${System.currentTimeMillis() - t0} ms, RSS after load ${rss0} MB (stream experts: $stream)  ${m.info}")
     val filler = (1..60).joinToString(" ") { "The quick brown fox jumps over the lazy dog number $it." }
     for (run in 1..2) {
         m.clearCache()
         val r = m.chat(listOf(ChatMessage.user("Summarise in one sentence: $filler")), GenerationParams(maxTokens = 64, reusePrefix = false))
-        println("run $run: prompt ${r.stats.prompt_tokens} tok @ ${"%.1f".format(r.stats.prefillTokensPerSecond)} tok/s; gen ${r.stats.generated_tokens} @ ${"%.1f".format(r.stats.decodeTokensPerSecond)} tok/s; ttft ${"%.0f".format(r.stats.ttft_ms)} ms")
+        val (rss, peak) = io.kestrel.engine.bench.MemoryProbe.rss()
+        val (anon, file) = io.kestrel.engine.bench.MemoryProbe.anonFile()
+        println("anon $anon MB, file-backed $file MB")
+        println("run $run: prompt ${r.stats.prompt_tokens} tok @ ${"%.1f".format(r.stats.prefillTokensPerSecond)} tok/s; gen ${r.stats.generated_tokens} @ ${"%.1f".format(r.stats.decodeTokensPerSecond)} tok/s; ttft ${"%.0f".format(r.stats.ttft_ms)} ms; RSS $rss MB (peak $peak)")
     }
 }

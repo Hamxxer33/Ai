@@ -78,7 +78,7 @@ class BenchmarkViewModel(app: Application) : AndroidViewModel(app) {
         _state.value = BenchState(running = true, label = label, total = qs.size, outFile = out.absolutePath)
         job = viewModelScope.launch(Dispatchers.Default) {
             try {
-                val runner = BenchmarkRunner(c.engine())
+                val runner = BenchmarkRunner(c.engine()) { c.device.probe() }
                 for (q in qs) {
                     val r = runner.run(q)
                     out.appendText(runner.encode(r) + "\n")
@@ -116,7 +116,8 @@ class BenchmarkViewModel(app: Application) : AndroidViewModel(app) {
                         )
                     }
                     val mem = c.device.memory()
-                    line.append("; app RSS ${mem.appRssMb} MB, avail ${mem.availMb} MB")
+                    val p = c.device.probe()
+                    line.append("; app RSS ${mem.appRssMb} MB, avail ${mem.availMb} MB; thermal ${p["thermal_status"]}, battery ${p["battery_temp_c"]} C")
                     _state.update { it.copy(runtimeLines = it.runtimeLines + line.toString()) }
                 }
                 val out = File(c.storage.benchDir(), "runtime-${System.currentTimeMillis()}.txt")

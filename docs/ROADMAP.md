@@ -30,14 +30,16 @@ test (travel). Status: ✅ done, 🔶 in progress, ⬜ planned.
 3. ⬜ **Travel/places pack**: Wikivoyage (CC BY-SA) as a jsonl pack, plus a places table built from
    OpenStreetMap (ODbL) with diet tags (vegan/vegetarian), cuisine and coordinates, and a "near X"
    query path. The judge's test is "best vegan restaurants in [city]".
-4. ⬜ **Deep tier on device**: Qwen3.6-35B-A3B at ~2.5 bit with dense tensors resident and experts
-   streamed (`streamExperts`). Measure page-cache hit rate and decode speed. If page-cache
-   streaming is too slow, add an explicit expert LRU cache with router-driven prefetch (a
-   llama.cpp patch).
+4. ⬜ **Deep tier on device**: Qwen3.6-35B-A3B at ~2.5 bit with experts streamed (`streamExperts`,
+   verified to keep weights file-backed). Measure page-cache hit rate and decode speed. Then:
+   (a) a llama.cpp patch that repacks only non-expert tensors, keeping ARM GEMM kernels for the
+   dense part; (b) if page-cache streaming is too slow, an explicit expert LRU cache with
+   router-driven prefetch.
 5. ⬜ **Speculative decoding** with the MTP heads shipped for Qwen3.5/3.6 and Gemma 4, or with the
    fast tier as draft model for the strong tier (same tokenizer family).
-6. ⬜ **Thread placement**: pin compute threads to the big cores and raise engine thread
-   priority. AndroidLM measured this as worth 10-60% on Tensor G3.
+6. 🔶 **Thread placement**: implemented (ggml threadpool restricted to the big cores, inference
+   threads at nice -10, both Settings toggles). AndroidLM measured 10-60% from similar changes on
+   Tensor G3. Needs an A/B measurement on the phone.
 7. ⬜ **Foreground service** so long answers and benchmark runs survive the app going to the
    background.
 8. ⬜ **Calculator tool** for numerical questions: the model writes an expression and the engine

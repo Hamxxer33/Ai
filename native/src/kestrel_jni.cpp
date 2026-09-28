@@ -336,17 +336,12 @@ JNIEXPORT jlong JNICALL JNI_FN(modelLoad)(JNIEnv * env, jclass, jbyteArray jPath
     mp.n_gpu_layers = nGpuLayers;
     mp.load_mode = use_mmap ? (use_mlock ? LLAMA_LOAD_MODE_MMAP_MLOCK : LLAMA_LOAD_MODE_MMAP)
                             : (use_mlock ? LLAMA_LOAD_MODE_MLOCK : LLAMA_LOAD_MODE_NONE);
-    mp.use_extra_bufts = !no_repack;
-
-    // Must stay alive for the duration of the load call.
-    llama_model_tensor_buft_override overrides[2] = {};
-    if (stream_experts) {
-        overrides[0].pattern = "\\.ffn_(up|down|gate|gate_up)_exps";
-        overrides[0].buft = ggml_backend_cpu_buffer_type();
-        overrides[1].pattern = nullptr;
-        overrides[1].buft = nullptr;
-        mp.tensor_buft_overrides = overrides;
-    }
+    // Expert streaming: every weight stays in the file mapping, so routed experts are paged in from
+    // flash on demand and the kernel can drop them under memory pressure. Upstream llama.cpp
+    // repacks any CPU tensor it can (into anonymous memory), even when a tensor is overridden to
+    // the CPU buffer type, so repacking is disabled for the whole model in this mode. Measured on
+    // Granite-4.0-H-Tiny (7B-A1B): 3.45 GB anonymous memory with repack, see docs/MODELS.md.
+    mp.use_extra_bufts = !(no_repack || stream_experts);
 
     const auto t0 = clk::now();
     llama_model * m = llama_model_load_from_file(path.c_str(), mp);

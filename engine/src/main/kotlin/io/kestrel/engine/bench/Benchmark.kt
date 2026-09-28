@@ -71,6 +71,8 @@ data class BenchResult(
     val peak_rss_mb: Long?,
     val steps: List<String>,
     val error: String? = null,
+    /** Platform probes taken after the answer (thermal status, battery temperature/level/current ...). */
+    val device: Map<String, String> = emptyMap(),
 )
 
 object Scoring {
@@ -101,6 +103,17 @@ object Scoring {
 }
 
 object MemoryProbe {
+    /** (anonymous, file-backed) resident MB. Anonymous memory cannot be dropped under pressure; file-backed (mmap'd weights) can. */
+    fun anonFile(): Pair<Long?, Long?> = runCatching {
+        var anon: Long? = null
+        var file: Long? = null
+        File("/proc/self/status").forEachLine { line ->
+            if (line.startsWith("RssAnon:")) anon = line.filter { it.isDigit() }.toLong() / 1024
+            if (line.startsWith("RssFile:")) file = line.filter { it.isDigit() }.toLong() / 1024
+        }
+        anon to file
+    }.getOrDefault(null to null)
+
     /** (current RSS, peak RSS) in MB from /proc/self/status (Linux and Android). */
     fun rss(): Pair<Long?, Long?> = runCatching {
         var cur: Long? = null
@@ -113,7 +126,11 @@ object MemoryProbe {
     }.getOrDefault(null to null)
 }
 
-class BenchmarkRunner(private val engine: ResearchEngine) {
+class BenchmarkRunner(
+    private val engine: ResearchEngine,
+    /** Optional device probe (the Android app reports thermal and battery state). */
+    private val probe: () -> Map<String, String> = { emptyMap() },
+) {
     private val json = Json { encodeDefaults = true }
 
     suspend fun run(q: BenchQuestion, defaultMode: ResearchMode? = null): BenchResult {
@@ -169,6 +186,7 @@ class BenchmarkRunner(private val engine: ResearchEngine) {
             },
             rss_mb = rss, peak_rss_mb = peak,
             steps = a.steps.map { "${it.id} [${it.status}] ${it.ms}ms ${it.detail}" },
+            device = runCatching { probe() }.getOrDefault(emptyMap()),
         )
     }
 
